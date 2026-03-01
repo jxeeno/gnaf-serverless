@@ -10,6 +10,14 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	"build": {
+		"watch_dir": [
+			"src/worker",
+			"src/shared",
+			"src/react-app",
+			"src/components"
+		]
+	},
 	"routes": [
 		{
 			"pattern": "gnaf.k3n.au",
