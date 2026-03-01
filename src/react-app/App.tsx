@@ -1,66 +1,380 @@
-// src/App.tsx
+import { useState, useCallback } from "react";
+import { Search, MapPin, Hash, FileJson, Table, ChevronLeft, ChevronRight, Loader2, Github } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { AddressResponse } from "../shared/types";
+import { AddressMap } from "./AddressMap";
 
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "/vite.svg";
-import cloudflareLogo from "./assets/Cloudflare_Logo.svg";
-import honoLogo from "./assets/hono.svg";
-import "./App.css";
+function AddressDetail({ address }: { address: AddressResponse }) {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge variant="secondary" className="font-mono text-xs">{address.pid}</Badge>
+          {address.precedence && (
+            <Badge variant={address.precedence === "primary" ? "default" : "outline"}>
+              {address.precedence}
+            </Badge>
+          )}
+          {address.lpid && (
+            <Badge variant="outline" className="font-mono text-xs">Lot/DP: {address.lpid}</Badge>
+          )}
+        </div>
+        <h2 className="text-xl font-semibold tracking-tight">{address.sla}</h2>
+        {address.ssla && (
+          <p className="text-sm text-muted-foreground">{address.ssla}</p>
+        )}
+      </div>
 
-function App() {
-	const [count, setCount] = useState(0);
-	const [name, setName] = useState("unknown");
+      <Tabs defaultValue="details" className="w-full">
+        <TabsList className="w-full grid grid-cols-3">
+          <TabsTrigger value="details" className="gap-1.5"><Table className="h-3.5 w-3.5" /> Details</TabsTrigger>
+          <TabsTrigger value="map" className="gap-1.5"><MapPin className="h-3.5 w-3.5" /> Map</TabsTrigger>
+          <TabsTrigger value="json" className="gap-1.5"><FileJson className="h-3.5 w-3.5" /> JSON</TabsTrigger>
+        </TabsList>
 
-	return (
-		<>
-			<div>
-				<a href="https://vite.dev" target="_blank">
-					<img src={viteLogo} className="logo" alt="Vite logo" />
-				</a>
-				<a href="https://react.dev" target="_blank">
-					<img src={reactLogo} className="logo react" alt="React logo" />
-				</a>
-				<a href="https://hono.dev/" target="_blank">
-					<img src={honoLogo} className="logo cloudflare" alt="Hono logo" />
-				</a>
-				<a href="https://workers.cloudflare.com/" target="_blank">
-					<img
-						src={cloudflareLogo}
-						className="logo cloudflare"
-						alt="Cloudflare logo"
-					/>
-				</a>
-			</div>
-			<h1>Vite + React + Hono + Cloudflare</h1>
-			<div className="card">
-				<button
-					onClick={() => setCount((count) => count + 1)}
-					aria-label="increment"
-				>
-					count is {count}
-				</button>
-				<p>
-					Edit <code>src/App.tsx</code> and save to test HMR
-				</p>
-			</div>
-			<div className="card">
-				<button
-					onClick={() => {
-						fetch("/api/")
-							.then((res) => res.json() as Promise<{ name: string }>)
-							.then((data) => setName(data.name));
-					}}
-					aria-label="get name"
-				>
-					Name from API is: {name}
-				</button>
-				<p>
-					Edit <code>worker/index.ts</code> to change the name
-				</p>
-			</div>
-			<p className="read-the-docs">Click on the logos to learn more</p>
-		</>
-	);
+        <TabsContent value="details" className="mt-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Address</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                {address.mla.map((line, i) => (
+                  <p key={i} className="text-sm font-medium">{line}</p>
+                ))}
+                {address.smla && (
+                  <div className="pt-2 mt-2 border-t">
+                    <p className="text-xs text-muted-foreground mb-1">Short form</p>
+                    {address.smla.map((line, i) => (
+                      <p key={i} className="text-sm">{line}</p>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Location</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {address.geocoding.geocodes.map((g, i) => (
+                  <div key={i} className="grid grid-cols-[80px_1fr] gap-1">
+                    <span className="text-muted-foreground">Latitude</span>
+                    <span className="font-mono">{g.latitude}</span>
+                    <span className="text-muted-foreground">Longitude</span>
+                    <span className="font-mono">{g.longitude}</span>
+                    <span className="text-muted-foreground">Type</span>
+                    <span>{g.type.name}</span>
+                  </div>
+                ))}
+                <div className="grid grid-cols-[80px_1fr] gap-1 pt-1 border-t">
+                  <span className="text-muted-foreground">Level</span>
+                  <span>{address.geocoding.level.name}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Street</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
+                  {address.structured.number && (
+                    <>
+                      <span className="text-muted-foreground">Number</span>
+                      <span>
+                        {[address.structured.number.prefix, address.structured.number.number, address.structured.number.suffix].filter(Boolean).join("")}
+                        {address.structured.number.last && (
+                          <span> - {[address.structured.number.last.prefix, address.structured.number.last.number, address.structured.number.last.suffix].filter(Boolean).join("")}</span>
+                        )}
+                      </span>
+                    </>
+                  )}
+                  <span className="text-muted-foreground">Name</span>
+                  <span>{address.structured.street.name}</span>
+                  {address.structured.street.type && (
+                    <>
+                      <span className="text-muted-foreground">Type</span>
+                      <span>{address.structured.street.type.code} ({address.structured.street.type.name})</span>
+                    </>
+                  )}
+                  {address.structured.street.suffix && (
+                    <>
+                      <span className="text-muted-foreground">Suffix</span>
+                      <span>{address.structured.street.suffix.name} ({address.structured.street.suffix.code})</span>
+                    </>
+                  )}
+                  {address.structured.street.class && (
+                    <>
+                      <span className="text-muted-foreground">Class</span>
+                      <span>{address.structured.street.class.name}</span>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Locality & State</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
+                  <span className="text-muted-foreground">Locality</span>
+                  <span>{address.structured.locality.name}</span>
+                  {address.structured.locality.class && (
+                    <>
+                      <span className="text-muted-foreground">Class</span>
+                      <span>{address.structured.locality.class.name}</span>
+                    </>
+                  )}
+                  <span className="text-muted-foreground">Postcode</span>
+                  <span>{address.structured.postcode ?? "\u2014"}</span>
+                  <span className="text-muted-foreground">State</span>
+                  <span>{address.structured.state.name} ({address.structured.state.abbreviation})</span>
+                  <span className="text-muted-foreground">Confidence</span>
+                  <span>{address.structured.confidence}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            {(address.structured.flat || address.structured.level || address.structured.buildingName || address.structured.lotNumber) && (
+              <Card className="sm:col-span-2">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Additional Details</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
+                    {address.structured.buildingName && (
+                      <>
+                        <span className="text-muted-foreground">Building</span>
+                        <span>{address.structured.buildingName}</span>
+                      </>
+                    )}
+                    {address.structured.flat && (
+                      <>
+                        <span className="text-muted-foreground">Flat/Unit</span>
+                        <span>
+                          {address.structured.flat.type.name}{" "}
+                          {[address.structured.flat.prefix, address.structured.flat.number, address.structured.flat.suffix].filter(v => v != null).join("")}
+                        </span>
+                      </>
+                    )}
+                    {address.structured.level && (
+                      <>
+                        <span className="text-muted-foreground">Level</span>
+                        <span>
+                          {address.structured.level.type.name}{" "}
+                          {[address.structured.level.prefix, address.structured.level.number, address.structured.level.suffix].filter(v => v != null).join("")}
+                        </span>
+                      </>
+                    )}
+                    {address.structured.lotNumber && (
+                      <>
+                        <span className="text-muted-foreground">Lot</span>
+                        <span>
+                          {[address.structured.lotNumber.prefix, address.structured.lotNumber.number, address.structured.lotNumber.suffix].filter(Boolean).join("")}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="map" className="mt-4">
+          <Card>
+            <CardContent className="p-0 overflow-hidden rounded-lg">
+              <AddressMap
+                latitude={address.geocoding.geocodes[0]?.latitude}
+                longitude={address.geocoding.geocodes[0]?.longitude}
+                label={address.sla}
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="json" className="mt-4">
+          <Card>
+            <CardContent className="p-4">
+              <pre className="text-xs font-mono bg-muted p-4 rounded-lg overflow-auto max-h-[600px] whitespace-pre-wrap break-all">
+                {JSON.stringify(address, null, 2)}
+              </pre>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
 }
 
-export default App;
+export default function App() {
+  const [mode, setMode] = useState<"gnaf" | "lotdp">("gnaf");
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<AddressResponse[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+
+  const handleSearch = useCallback(async () => {
+    const q = query.trim();
+    if (!q) return;
+
+    setLoading(true);
+    setError(null);
+    setResults([]);
+    setPage(0);
+
+    try {
+      const url = mode === "gnaf"
+        ? `/api/addresses/${encodeURIComponent(q)}`
+        : `/api/addresses?lotdp=${encodeURIComponent(q)}`;
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      setResults(Array.isArray(data) ? data : [data]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }, [query, mode]);
+
+  const totalPages = results.length;
+  const currentResult = results[page];
+
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
+        <div className="mb-8 text-center">
+          <div className="inline-flex items-center gap-2 mb-3">
+            <MapPin className="h-6 w-6 text-primary" />
+            <h1 className="text-2xl font-bold tracking-tight">GNAF Lookup</h1>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Australian address lookup powered by the Geocoded National Address File
+          </p>
+          <a
+            href="https://github.com/jxeeno/gnaf-serverless"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Github className="h-3.5 w-3.5" />
+            View on GitHub
+          </a>
+        </div>
+
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div className="flex gap-2 mb-3">
+              <Button
+                variant={mode === "gnaf" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setMode("gnaf")}
+                className="gap-1.5"
+              >
+                <Hash className="h-3.5 w-3.5" />
+                GNAF PID
+              </Button>
+              <Button
+                variant={mode === "lotdp" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setMode("lotdp")}
+                className="gap-1.5"
+              >
+                <MapPin className="h-3.5 w-3.5" />
+                Lot/DP
+              </Button>
+            </div>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSearch();
+              }}
+            >
+              <Input
+                placeholder={mode === "gnaf" ? "e.g. GAOT_718710337" : "e.g. 41/37U/22"}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="font-mono"
+              />
+              <Button type="submit" disabled={loading || !query.trim()}>
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        {error && (
+          <Card className="mb-6 border-destructive/50">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{error}</p>
+            </CardContent>
+          </Card>
+        )}
+
+        {results.length > 0 && (
+          <div className="space-y-4">
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">
+                  {results.length} address{results.length !== 1 ? "es" : ""} found
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <span className="text-sm tabular-nums">{page + 1} / {totalPages}</span>
+                  <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {currentResult && (
+              <Card key={currentResult.pid}>
+                <CardContent className="pt-6">
+                  <AddressDetail address={currentResult} />
+                </CardContent>
+              </Card>
+            )}
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
+                  <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+                </Button>
+                <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
+                  Next <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!loading && !error && results.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            <MapPin className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm">Enter a GNAF PID or Lot/DP reference to look up an address</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -191,6 +191,9 @@ dist
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,node,git
 
+### GNAF Pipeline ###
+data/
+
 ### Wrangler ###
 .wrangler/
 .env*

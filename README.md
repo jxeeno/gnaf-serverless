@@ -1,44 +1,59 @@
-# React + Vite + Hono + Cloudflare Workers
+# GNAF Serverless Lookup
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/vite-react-template)
+Serverless Australian address lookup API powered by the [Geocoded National Address File (G-NAF)](https://data.gov.au/dataset/geocoded-national-address-file-g-naf). Runs on Cloudflare Workers with data stored in any S3-compatible object storage.
 
-This template provides a minimal setup for building a React application with TypeScript and Vite, designed to run on Cloudflare Workers. It features hot module replacement, ESLint integration, and the flexibility of Workers deployments.
+## How It Works
 
-![React + TypeScript + Vite + Cloudflare Workers](https://imagedelivery.net/wSMYJvS3Xw-n339CbDyDIA/fc7b4b62-442b-4769-641b-ad4422d74300/public)
+1. A **data pipeline** downloads GNAF from data.gov.au, denormalizes it with DuckDB, shards the data by MD5-hashed GNAF PID, gzip-compresses each shard, and uploads to S3-compatible object storage.
+2. A **Cloudflare Worker** serves API requests by fetching and caching the relevant shard file from S3, then returning the formatted address response.
+3. A **React frontend** provides a UI for looking up addresses by GNAF PID or Lot/DP reference.
 
-<!-- dash-content-start -->
+## API
 
-🚀 Supercharge your web development with this powerful stack:
+### `GET /api/addresses/:pid`
 
-- [**React**](https://react.dev/) - A modern UI library for building interactive interfaces
-- [**Vite**](https://vite.dev/) - Lightning-fast build tooling and development server
-- [**Hono**](https://hono.dev/) - Ultralight, modern backend framework
-- [**Cloudflare Workers**](https://developers.cloudflare.com/workers/) - Edge computing platform for global deployment
+Look up a single address by GNAF PID.
 
-### ✨ Key Features
-
-- 🔥 Hot Module Replacement (HMR) for rapid development
-- 📦 TypeScript support out of the box
-- 🛠️ ESLint configuration included
-- ⚡ Zero-config deployment to Cloudflare's global network
-- 🎯 API routes with Hono's elegant routing
-- 🔄 Full-stack development setup
-- 🔎 Built-in Observability to monitor your Worker
-
-Get started in minutes with local development or deploy directly via the Cloudflare dashboard. Perfect for building modern, performant web applications at the edge.
-
-<!-- dash-content-end -->
-
-## Getting Started
-
-To start a new project with this template, run:
-
-```bash
-npm create cloudflare@latest -- --template=cloudflare/templates/vite-react-template
+```
+GET /api/addresses/GAOT_718710337
 ```
 
-A live deployment of this template is available at:
-[https://react-vite-template.templates.workers.dev](https://react-vite-template.templates.workers.dev)
+### `GET /api/addresses?lotdp=:lotdp`
+
+Look up addresses by Lot/DP (legal parcel ID). May return multiple results.
+
+```
+GET /api/addresses?lotdp=41/37U/22
+```
+
+### Response Format
+
+```json
+{
+  "pid": "GAOT_718710337",
+  "lpid": "41/37U/22",
+  "precedence": "primary",
+  "sla": "UNIT 1, 19 MURRAY RD, CHRISTMAS ISLAND OT 6798",
+  "mla": ["UNIT 1", "19 MURRAY RD", "CHRISTMAS ISLAND OT 6798"],
+  "structured": {
+    "confidence": 2,
+    "number": { "number": 19 },
+    "street": { "name": "MURRAY", "type": { "code": "ROAD", "name": "RD" } },
+    "locality": { "name": "CHRISTMAS ISLAND" },
+    "postcode": "6798",
+    "state": { "name": "OTHER TERRITORIES", "abbreviation": "OT" }
+  },
+  "geocoding": {
+    "level": { "code": "7", "name": "LOCALITY, STREET, ADDRESS" },
+    "geocodes": [{
+      "default": true,
+      "latitude": -10.42189,
+      "longitude": 105.67814,
+      "type": { "code": "PC", "name": "PROPERTY CENTROID" }
+    }]
+  }
+}
+```
 
 ## Development
 
@@ -48,43 +63,68 @@ Install dependencies:
 npm install
 ```
 
-Start the development server with:
+Start the development server (frontend + worker):
 
 ```bash
 npm run dev
 ```
 
-Your application will be available at [http://localhost:5173](http://localhost:5173).
+The app will be available at [http://localhost:5173](http://localhost:5173).
 
-## Production
+## Data Pipeline
 
-Build your project for production:
+The pipeline downloads, processes, and uploads GNAF data. It runs via GitHub Actions on a quarterly schedule or can be run locally.
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `S3_ENDPOINT` | S3-compatible endpoint URL |
+| `S3_REGION` | S3 region (default: `auto`) |
+| `S3_BUCKET` | S3 bucket name |
+| `S3_ACCESS_KEY_ID` | S3 access key |
+| `S3_SECRET_ACCESS_KEY` | S3 secret key |
+| `SHARD_PREFIX_LENGTH` | Hex chars for shard key (default: `3`, giving 4096 shards) |
+| `GNAF_STATES` | Comma-separated state filter (e.g. `OT,NSW`). Omit for all states. |
+
+### Pipeline Steps
+
+```bash
+# Run the full pipeline
+npm run pipeline:run
+
+# Or run individual steps
+npm run pipeline:download   # Download GNAF ZIP from data.gov.au
+npm run pipeline:import     # Import PSVs into DuckDB and denormalize
+npm run pipeline:shard      # Hash-shard and gzip-compress records
+npm run pipeline:upload     # Upload shards to S3
+```
+
+## Deployment
+
+Build and deploy the worker:
 
 ```bash
 npm run build
+npm run deploy
 ```
 
-Preview your build locally:
+Set S3 credentials as Wrangler secrets:
 
 ```bash
-npm run preview
+npx wrangler secret put S3_ACCESS_KEY_ID
+npx wrangler secret put S3_SECRET_ACCESS_KEY
 ```
 
-Deploy your project to Cloudflare Workers:
+## Tech Stack
 
-```bash
-npm run build && npm run deploy
-```
+- **Runtime**: Cloudflare Workers
+- **API Framework**: Hono
+- **Frontend**: React, Tailwind CSS, shadcn/ui, Leaflet
+- **Data Processing**: DuckDB, TypeScript (tsx)
+- **Storage**: S3-compatible object storage
+- **Build**: Vite
 
-Monitor your workers:
+## License
 
-```bash
-npx wrangler tail
-```
-
-## Additional Resources
-
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Vite Documentation](https://vitejs.dev/guide/)
-- [React Documentation](https://reactjs.org/)
-- [Hono Documentation](https://hono.dev/)
+GNAF data is provided by the Australian Government under the [End User Licence Agreement](https://data.gov.au/dataset/geocoded-national-address-file-g-naf).
