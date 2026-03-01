@@ -1,16 +1,19 @@
 import { AwsClient } from "aws4fetch";
 import type { AddressShardData, LotDpShardData } from "../shared/types.js";
 
-export interface S3Config {
+export interface S3BaseConfig {
   endpoint: string;
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
   region: string;
+}
+
+export interface S3Config extends S3BaseConfig {
   gnafVersion: string;
 }
 
-function getS3Client(config: S3Config): AwsClient {
+function getS3Client(config: S3BaseConfig): AwsClient {
   return new AwsClient({
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
@@ -50,6 +53,44 @@ async function fetchAndDecompress(
   }
 
   return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Fetch the latest GNAF version string from gnaf/latest.json in S3.
+ * Cached for 1 hour.
+ */
+export async function fetchLatestVersion(
+  config: S3BaseConfig,
+  ctx: ExecutionContext
+): Promise<string> {
+  const url = `${config.endpoint}/${config.bucket}/gnaf/latest.json`;
+  const cacheKey = new Request(url);
+  const cache = caches.default;
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    const data = await cached.json<{ version: string }>();
+    return data.version;
+  }
+
+  const client = getS3Client(config);
+  const res = await client.fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch latest.json: ${res.status} ${res.statusText}`);
+  }
+
+  const json = await res.text();
+  const data = JSON.parse(json) as { version: string };
+
+  const cacheResponse = new Response(json, {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=3600",
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+
+  return data.version;
 }
 
 /**

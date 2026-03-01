@@ -5,6 +5,8 @@ import { formatAddressResponse } from "../shared/address-format.js";
 import {
   fetchAddressShard,
   fetchLotDpShard,
+  fetchLatestVersion,
+  type S3BaseConfig,
   type S3Config,
 } from "./s3.js";
 
@@ -14,7 +16,7 @@ type Bindings = {
   S3_ACCESS_KEY_ID: string;
   S3_SECRET_ACCESS_KEY: string;
   S3_REGION: string;
-  GNAF_VERSION: string;
+  GNAF_VERSION?: string;
   SHARD_PREFIX_LENGTH: string;
 };
 
@@ -26,15 +28,23 @@ function md5hex(input: string): string {
   return createHash("md5").update(input).digest("hex");
 }
 
-function getS3Config(env: Bindings): S3Config {
+function getBaseS3Config(env: Bindings): S3BaseConfig {
   return {
     endpoint: env.S3_ENDPOINT,
     bucket: env.S3_BUCKET,
     accessKeyId: env.S3_ACCESS_KEY_ID,
     secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     region: env.S3_REGION ?? "auto",
-    gnafVersion: env.GNAF_VERSION,
   };
+}
+
+async function resolveS3Config(
+  env: Bindings,
+  ctx: ExecutionContext
+): Promise<S3Config> {
+  const base = getBaseS3Config(env);
+  const version = env.GNAF_VERSION || await fetchLatestVersion(base, ctx);
+  return { ...base, gnafVersion: version };
 }
 
 function getShardPrefixLength(env: Bindings): number {
@@ -47,7 +57,7 @@ app.get("/api/health", (c) => c.json({ status: "ok" }));
 // Get address by GNAF PID
 app.get("/api/addresses/:pid", async (c) => {
   const pid = c.req.param("pid").toUpperCase();
-  const config = getS3Config(c.env);
+  const config = await resolveS3Config(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const shardPrefix = md5hex(pid).substring(0, prefixLen);
 
@@ -74,7 +84,7 @@ app.get("/api/addresses", async (c) => {
     );
   }
 
-  const config = getS3Config(c.env);
+  const config = await resolveS3Config(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const lotdpShardPrefix = md5hex(lotdp).substring(0, prefixLen);
 

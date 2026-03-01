@@ -15,10 +15,17 @@ on:
         required: false
         default: 'GDA2020'
 
+permissions:
+  contents: write
+
 jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      NODE_OPTIONS: '--max-old-space-size=4096'
+      SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
+      GNAF_DATUM: ${{ github.event.inputs.datum || 'GDA2020' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,14 +37,79 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run GNAF pipeline
-        run: npm run pipeline:run
+      - name: Download GNAF data
+        run: npm run pipeline:download
+
+      - name: Import into DuckDB
+        run: npm run pipeline:import
+
+      - name: Shard data
+        run: npm run pipeline:shard
+
+      - name: Read metadata
+        id: meta
+        run: |
+          VERSION=$(jq -r .version data/shards/metadata.json)
+          DATE=$(jq -r .date data/shards/metadata.json)
+          TOTAL=$(jq -r .totalAddresses data/shards/metadata.json)
+          DATUM=$(jq -r .datum data/shards/metadata.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "datum=$DATUM" >> "$GITHUB_OUTPUT"
+
+      - name: Create release archive
+        run: tar -cf gnaf-shards-${{ steps.meta.outputs.version }}.tar -C data/shards .
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md <<EOF
+          ## GNAF Sharded Data
+
+          - **Version**: ${{ steps.meta.outputs.version }}
+          - **Datum**: ${{ steps.meta.outputs.datum }}
+          - **Total addresses**: ${{ steps.meta.outputs.total }}
+          - **Built**: ${{ steps.meta.outputs.date }}
+          - **Shard prefix length**: ${{ env.SHARD_PREFIX_LENGTH }}
+
+          ### Contents
+
+          The archive contains pre-processed, hash-sharded GNAF address data ready to upload to any S3-compatible object storage.
+
+          \`\`\`
+          addresses/    # Address shards (gzipped JSON, keyed by GNAF PID)
+          lotdp/        # Lot/DP index shards (gzipped JSON, mapping lot/DP -> GNAF PIDs)
+          metadata.json # Version, counts, and configuration
+          \`\`\`
+
+          ### Usage
+
+          1. Download and extract the archive
+          2. Upload the contents to your S3-compatible bucket under \`gnaf/${{ steps.meta.outputs.version }}/\`
+          3. Create a \`gnaf/latest.json\` pointer: \`{"version": "${{ steps.meta.outputs.version }}"}\`
+          4. Configure the worker with your S3 endpoint and bucket
+
+          See the [README](https://github.com/${{ github.repository }}#using-pre-built-data) for details.
+
+          ---
+
+          GNAF data is provided by the Australian Government under the [End User Licence Agreement](https://data.gov.au/dataset/geocoded-national-address-file-g-naf).
+          EOF
+
+      - name: Create GitHub release
         env:
-          NODE_OPTIONS: '--max-old-space-size=4096'
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.version }}" \
+            --title "GNAF ${{ steps.meta.outputs.version }}" \
+            --notes-file release-notes.md \
+            gnaf-shards-${{ steps.meta.outputs.version }}.tar
+
+      - name: Upload to S3
+        run: npm run pipeline:upload
+        env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
           S3_REGION: ${{ secrets.S3_REGION }}
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-          SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
-          GNAF_DATUM: ${{ github.event.inputs.datum || 'GDA2020' }}

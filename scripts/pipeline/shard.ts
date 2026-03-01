@@ -209,7 +209,7 @@ export async function shard(): Promise<void> {
 
   // Write metadata
   const now = new Date();
-  const version = `v${now.toISOString().slice(0, 10).replace(/-/g, "")}`;
+  const version = `v${now.toISOString().slice(0, 10).replace(/-/g, "")}-${DATUM.toLowerCase()}`;
   const metadata: ShardMetadata = {
     version,
     date: now.toISOString(),

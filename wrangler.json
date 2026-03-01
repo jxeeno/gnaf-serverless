@@ -25,7 +25,6 @@
 		}
 	],
 	"vars": {
-		"GNAF_VERSION": "v20260301",
 		"SHARD_PREFIX_LENGTH": "3"
 	}
 }
