@@ -71,21 +71,25 @@ async function uploadDirectory(
   }
 
   let uploaded = 0;
-  const concurrency = 10;
-  for (let i = 0; i < entries.length; i += concurrency) {
-    const batch = entries.slice(i, i + concurrency);
-    await Promise.all(
-      batch.map(async (entry) => {
-        const localPath = path.join(localDir, entry);
-        const s3Key = `${s3Prefix}/${entry}`;
-        await uploadFile(client, localPath, s3Key, contentType, contentEncoding);
-      })
-    );
-    uploaded += batch.length;
-    if (uploaded % 100 < concurrency) {
-      console.log(`  Uploaded ${uploaded}/${entries.length} files to ${s3Prefix}/`);
+  const maxConcurrency = 10;
+  const executing = new Set<Promise<void>>();
+
+  for (const entry of entries) {
+    const localPath = path.join(localDir, entry);
+    const s3Key = `${s3Prefix}/${entry}`;
+    const p = uploadFile(client, localPath, s3Key, contentType, contentEncoding).then(() => {
+      executing.delete(p);
+      uploaded++;
+      if (uploaded % 100 === 0) {
+        console.log(`  Uploaded ${uploaded}/${entries.length} files to ${s3Prefix}/`);
+      }
+    });
+    executing.add(p);
+    if (executing.size >= maxConcurrency) {
+      await Promise.race(executing);
     }
   }
+  await Promise.all(executing);
   return uploaded;
 }
 
