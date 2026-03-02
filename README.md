@@ -15,32 +15,32 @@
 Autocomplete address search. Returns matching streets and scored addresses.
 
 Supports:
-- Street name search: `murray road` or `murray rd` (synonym expansion)
-- Street number: `28 murray rd`
-- Unit/flat: `3/5 murray rd`, `unit 3 5 murray`, `apt 3 murray`
+- Street name search: `canberra avenue` or `canberra av` (synonym expansion)
+- Street number: `113 canberra av`
+- Unit/flat: `3/113 canberra av`, `unit 3 113 canberra`, `apt 3 canberra`
 
 ```
-GET /api/addresses/search?q=28+murray+rd
+GET /api/addresses/search?q=113+canberra+av+griffith
 ```
 
 ```json
 {
   "streets": [
     {
-      "streetId": 6885,
-      "display": "MURRAY RD, CHRISTMAS ISLAND, OT, 6798",
-      "streetName": "MURRAY",
-      "locality": "CHRISTMAS ISLAND",
-      "state": "OT",
-      "postcode": "6798",
-      "addressCount": 50
+      "streetId": 3008,
+      "display": "CANBERRA AV, GRIFFITH, ACT, 2603",
+      "streetName": "CANBERRA",
+      "locality": "GRIFFITH",
+      "state": "ACT",
+      "postcode": "2603",
+      "addressCount": 460
     }
   ],
   "addresses": [
     {
-      "pid": "GAOT_717319887",
-      "sla": "28 MURRAY RD, CHRISTMAS ISLAND OT 6798",
-      "streetId": 6885
+      "pid": "GAACT717940975",
+      "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
+      "streetId": 3008
     }
   ]
 }
@@ -55,7 +55,7 @@ List all addresses on a street (drill-down from search). Supports `?digit=N` for
 Look up a single address by GNAF PID.
 
 ```
-GET /api/addresses/GAOT_718710337
+GET /api/addresses/GAACT717940975
 ```
 
 ### `GET /api/addresses?lotdp=:lotdp`
@@ -63,33 +63,33 @@ GET /api/addresses/GAOT_718710337
 Look up addresses by Lot/DP (legal parcel ID). May return multiple results.
 
 ```
-GET /api/addresses?lotdp=41/37U/22
+GET /api/addresses?lotdp=CANB/GRIF/25/14
 ```
 
 ### Address Response Format
 
 ```json
 {
-  "pid": "GAOT_718710337",
-  "lpid": "41/37U/22",
+  "pid": "GAACT717940975",
+  "lpid": "CANB/GRIF/25/14",
   "precedence": "primary",
-  "sla": "UNIT 1, 19 MURRAY RD, CHRISTMAS ISLAND OT 6798",
-  "mla": ["UNIT 1", "19 MURRAY RD", "CHRISTMAS ISLAND OT 6798"],
+  "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
+  "mla": ["113 CANBERRA AV", "GRIFFITH ACT 2603"],
   "structured": {
-    "confidence": 2,
-    "number": { "number": 19 },
-    "street": { "name": "MURRAY", "type": { "code": "ROAD", "name": "RD" } },
-    "locality": { "name": "CHRISTMAS ISLAND" },
-    "postcode": "6798",
-    "state": { "name": "OTHER TERRITORIES", "abbreviation": "OT" }
+    "confidence": 1,
+    "number": { "number": 113 },
+    "street": { "name": "CANBERRA", "type": { "code": "AV", "name": "AVENUE" } },
+    "locality": { "name": "GRIFFITH" },
+    "postcode": "2603",
+    "state": { "name": "AUSTRALIAN CAPITAL TERRITORY", "abbreviation": "ACT" }
   },
   "geocoding": {
     "level": { "code": "7", "name": "LOCALITY, STREET, ADDRESS" },
     "geocodes": [{
       "default": true,
-      "latitude": -10.42189,
-      "longitude": 105.67814,
-      "type": { "code": "PC", "name": "PROPERTY CENTROID" }
+      "latitude": -35.32200812,
+      "longitude": 149.14668731,
+      "type": { "code": "FCS", "name": "FRONTAGE CENTRE SETBACK" }
     }]
   }
 }

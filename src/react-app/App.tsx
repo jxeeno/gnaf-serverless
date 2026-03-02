@@ -441,7 +441,7 @@ export default function App() {
             {mode === "search" ? (
               <div className="relative">
                 <Input
-                  placeholder="Search for an address, e.g. 28 Murray Road Christmas Island"
+                  placeholder="Search for an address, e.g. 113 Canberra Avenue Griffith"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
@@ -458,7 +458,7 @@ export default function App() {
                 }}
               >
                 <Input
-                  placeholder={mode === "gnaf" ? "e.g. GAOT_718710337" : "e.g. 41/37U/22"}
+                  placeholder={mode === "gnaf" ? "e.g. GAACT717940975" : "e.g. CANB/GRIF/25/14"}
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="font-mono"
