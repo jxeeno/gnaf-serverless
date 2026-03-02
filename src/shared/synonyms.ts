@@ -130,7 +130,7 @@ const LEVEL_TYPE_PAIRS: [string, string][] = [
   ["UNGD", "UNDERGROUND"],
 ];
 
-export const SYNONYMS: Record<string, string[]> = {
+const _synonyms: Record<string, string[]> = {
   ...buildSynonymMap(STREET_TYPE_PAIRS),
   ...buildSynonymMap(STREET_SUFFIX_PAIRS),
   ...buildSynonymMap(FLAT_TYPE_PAIRS),
@@ -138,12 +138,59 @@ export const SYNONYMS: Record<string, string[]> = {
 };
 
 /**
+ * Common informal abbreviations not in the official GNAF authority tables.
+ * Maps each informal abbreviation to a GNAF term it's equivalent to.
+ * The alias is added to the existing synonym group for that term.
+ */
+const INFORMAL_ALIASES: [string, string][] = [
+  // Street types — Australia Post / common usage
+  ["AVE", "AVENUE"],
+  ["CRES", "CRESCENT"],
+  ["BLVD", "BOULEVARD"],
+  ["CRT", "COURT"],
+  ["DRV", "DRIVE"],
+  ["TERR", "TERRACE"],
+  ["TER", "TERRACE"],
+  ["GRV", "GROVE"],
+  ["LN", "LANE"],
+  ["PKWY", "PARKWAY"],
+  ["SQR", "SQUARE"],
+  ["CIRC", "CIRCUIT"],
+  ["RDG", "RIDGE"],
+  // Flat types
+  ["U", "UNIT"],
+  ["UN", "UNIT"],
+  ["FLT", "FLAT"],
+  ["STE", "SUITE"],
+];
+
+// Add informal aliases into existing synonym groups
+for (const [alias, target] of INFORMAL_ALIASES) {
+  const ua = alias.toUpperCase();
+  const ut = target.toUpperCase();
+  const existing = _synonyms[ut];
+  if (existing) {
+    // Extend the shared group array and point the alias at it
+    if (!existing.includes(ua)) existing.push(ua);
+    _synonyms[ua] = existing;
+  } else {
+    // Target not in map (e.g., UNIT, LANE, FLAT have no GNAF pair) — create a pair
+    const group = [ut, ua];
+    _synonyms[ut] = group;
+    _synonyms[ua] = group;
+  }
+}
+
+export const SYNONYMS: Record<string, string[]> = _synonyms;
+
+/**
  * Set of all flat type and level type keywords.
  * These should be stripped from FTS5 search terms since they don't
  * appear in the street display column.
  */
 export const FLAT_LEVEL_KEYWORDS: Set<string> = new Set([
-  "UNIT", // Not in pairs (code === name in GNAF)
+  "UNIT", "U", "UN", // UNIT + informal aliases
+  "FLAT", "FLT",     // FLAT + informal alias
   ...FLAT_TYPE_PAIRS.flat(),
   ...LEVEL_TYPE_PAIRS.flat(),
 ]);
