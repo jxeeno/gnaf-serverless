@@ -37,6 +37,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Cache GNAF ZIP
+        uses: actions/cache@v4
+        with:
+          path: data/gnaf.zip
+          key: gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-${{ github.run_id }}
+          restore-keys: |
+            gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-
+
       - name: Download GNAF data
         run: npm run pipeline:download
 
