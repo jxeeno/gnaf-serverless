@@ -21,7 +21,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       NODE_OPTIONS: '--max-old-space-size=4096'
       SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
