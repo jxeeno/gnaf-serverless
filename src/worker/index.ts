@@ -151,7 +151,8 @@ app.get("/api/addresses/search", async (c) => {
 
   const rankingExpr = `
          (
-           CASE WHEN s.street_name = ?4 THEN 100
+           CASE WHEN s.street_name = ?4 THEN
+                  CASE WHEN LENGTH(?4) >= 4 THEN 100 ELSE 15 END
                 WHEN s.street_name LIKE ?4 || '%' THEN 10
            ELSE 0 END
          )
@@ -163,6 +164,13 @@ app.get("/api/addresses/search", async (c) => {
          + (
            CASE WHEN ?3 IS NOT NULL AND s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL THEN
              CASE WHEN ?3 BETWEEN s.flat_min AND s.flat_max THEN 50 ELSE 0 END
+           ELSE 0 END
+         )
+         + (
+           CASE WHEN s.address_count >= 2000 THEN 20
+                WHEN s.address_count >= 500 THEN 15
+                WHEN s.address_count >= 100 THEN 10
+                WHEN s.address_count >= 20 THEN 5
            ELSE 0 END
          )`;
 
@@ -183,6 +191,7 @@ app.get("/api/addresses/search", async (c) => {
          WHERE s.street_name LIKE ?1 || '%'
            AND (?2 IS NULL OR (s.num_min IS NOT NULL AND s.num_max IS NOT NULL AND ?2 BETWEEN s.num_min AND s.num_max))
            AND (?3 IS NULL OR (s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL AND ?3 BETWEEN s.flat_min AND s.flat_max))
+         ORDER BY (${rankingExpr}) DESC
          LIMIT ?5`
       )
       .bind(firstTextToken, capTo3(streetHint), capTo3(flatHint ?? levelHint), firstTextToken, streetLimit)
@@ -257,8 +266,14 @@ app.get("/api/addresses/search", async (c) => {
           addShardFetch(prefix, `${street.street_key}|${d}`);
         }
       } else {
-        // No numbers: fetch base shard for representative addresses
+        // No numbers: fetch base shard + first digit sub-shard for representative addresses.
+        // Large streets have all numbered addresses in digit sub-shards, so the base shard
+        // alone may be empty.
         addShardFetch(street.shard_prefix, street.street_key);
+        const firstDigit = Object.keys(digitMap).sort()[0];
+        if (firstDigit != null) {
+          addShardFetch(digitMap[firstDigit], `${street.street_key}|${firstDigit}`);
+        }
       }
     } else {
       // No digit sub-sharding: fetch base shard
