@@ -37,8 +37,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Cache GNAF ZIP
-        uses: actions/cache@v4
+      - name: Restore GNAF ZIP cache
+        uses: actions/cache/restore@v4
         with:
           path: data/gnaf.zip
           key: gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-${{ github.run_id }}
@@ -47,6 +47,13 @@ jobs:
 
       - name: Download GNAF data
         run: npm run pipeline:download
+
+      - name: Save GNAF ZIP cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/gnaf.zip
+          key: gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-${{ github.run_id }}
 
       - name: Import into DuckDB
         run: npm run pipeline:import
