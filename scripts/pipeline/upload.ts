@@ -126,6 +126,18 @@ export async function upload(): Promise<void> {
   );
   console.log(`  Uploaded ${lotdpCount} lot/DP shards`);
 
+  // Upload street shards (for search/autocomplete)
+  const streetShardsDir = path.join(SHARDS_DIR, "streets");
+  console.log("Uploading street shards...");
+  const streetCount = await uploadDirectory(
+    client,
+    streetShardsDir,
+    `gnaf/${version}/streets`,
+    "application/json",
+    "gzip"
+  );
+  console.log(`  Uploaded ${streetCount} street shards`);
+
   // Upload metadata
   console.log("Uploading metadata...");
   await uploadFile(

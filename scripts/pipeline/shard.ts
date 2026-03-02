@@ -18,7 +18,7 @@ function n<T>(val: T | null | undefined): T | undefined {
   return val;
 }
 
-function toShardRecord(row: Record<string, unknown>): ShardRecord {
+export function toShardRecord(row: Record<string, unknown>): ShardRecord {
   const rec: ShardRecord = {
     ap: (row.alias_principal as string) ?? "P",
     sn: row.street_name as string,
@@ -74,7 +74,7 @@ function toShardRecord(row: Record<string, unknown>): ShardRecord {
 /**
  * Read all rows from a DuckDB result into an array of row objects.
  */
-async function readAllRows(
+export async function readAllRows(
   result: { fetchChunk: () => Promise<any>; columnNames: () => string[] }
 ): Promise<Record<string, unknown>[]> {
   const columns = result.columnNames();

@@ -101,6 +101,21 @@ export type AddressShardData = Record<string, ShardRecord>;
 /** A lot/DP shard file: map of lot/DP string → array of GNAF PIDs */
 export type LotDpShardData = Record<string, string[]>;
 
+/** A compact address entry in a street shard */
+export interface StreetAddressEntry {
+  /** GNAF PID */
+  p: string;
+  /** Display prefix (everything before the street name, e.g. "UNIT 3, 28") */
+  d: string;
+  /** number_first (for numeric matching) */
+  n?: number;
+  /** flat_number (for numeric matching) */
+  f?: number;
+}
+
+/** A street shard file: map of street key → array of address entries */
+export type StreetShardData = Record<string, StreetAddressEntry[]>;
+
 /** Metadata written alongside shard files */
 export interface ShardMetadata {
   version: string;

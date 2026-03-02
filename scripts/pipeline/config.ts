@@ -16,6 +16,8 @@ export const DUCKDB_PATH = path.join(DATA_DIR, "gnaf.duckdb");
 export const SHARDS_DIR = path.join(DATA_DIR, "shards");
 export const ADDRESS_SHARDS_DIR = path.join(SHARDS_DIR, "addresses");
 export const LOTDP_SHARDS_DIR = path.join(SHARDS_DIR, "lotdp");
+export const SEARCH_INDEX_SQL_PATH = path.join(SHARDS_DIR, "search-index.sql");
+export const SEARCH_INDEX_DIR = path.join(SHARDS_DIR, "search-index");
 
 export const S3_ENDPOINT = process.env.S3_ENDPOINT ?? "";
 export const S3_REGION = process.env.S3_REGION ?? "auto";

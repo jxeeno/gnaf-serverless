@@ -117,6 +117,86 @@ function buildSmla(r: ShardRecord): string[] | undefined {
 }
 
 /**
+ * Build the display prefix — everything before the street name in the SLA.
+ * E.g. "UNIT 3, 28" or "28A" or "LOT 5" or "" (if no prefix).
+ */
+export function buildAddressPrefix(r: ShardRecord): string {
+  const lines: string[] = [];
+
+  // Level line
+  if (r.ltc != null || r.lvn != null) {
+    const levelStr = [
+      r.ltn ?? "",
+      " ",
+      r.lnp ?? "",
+      r.lvn != null ? String(r.lvn) : "",
+      r.lns ?? "",
+    ]
+      .join("")
+      .trim();
+    if (levelStr) lines.push(levelStr);
+  }
+
+  // Flat line
+  if (r.ftc != null || r.fn != null) {
+    const flatStr = [
+      r.ftn ?? "",
+      " ",
+      r.fnp ?? "",
+      r.fn != null ? String(r.fn) : "",
+      r.fns ?? "",
+    ]
+      .join("")
+      .trim();
+    if (flatStr) lines.push(flatStr);
+  }
+
+  // Building name
+  if (r.bn) {
+    lines.push(r.bn);
+  }
+
+  // If we have 3 prefix lines (level+flat+building), merge first two
+  if (lines.length === 3) {
+    lines[1] = `${lines[0]}, ${lines[1]}`;
+    lines.shift();
+  }
+
+  // Street number
+  if (r.nf != null) {
+    let streetNum = `${r.nfp ?? ""}${r.nf}${r.nfs ?? ""}`;
+    if (r.nl != null) {
+      streetNum += `-${r.nlp ?? ""}${r.nl}${r.nls ?? ""}`;
+    }
+    lines.push(streetNum);
+  } else if (r.ln != null) {
+    lines.push(`LOT ${r.lp ?? ""}${r.ln}${r.ls ?? ""}`);
+  }
+
+  return lines.join(", ");
+}
+
+/**
+ * Reconstruct a single-line address from a display prefix and street components.
+ */
+export function reconstructSla(
+  displayPrefix: string,
+  streetName: string,
+  streetType: string | null | undefined,
+  streetSuffix: string | null | undefined,
+  localityName: string,
+  state: string,
+  postcode: string | null | undefined
+): string {
+  let streetPart = streetName;
+  if (streetType) streetPart += ` ${streetType}`;
+  if (streetSuffix) streetPart += ` ${streetSuffix}`;
+  const localityPart = `${localityName} ${state} ${postcode ?? ""}`.trim();
+  if (displayPrefix) return `${displayPrefix} ${streetPart}, ${localityPart}`;
+  return `${streetPart}, ${localityPart}`;
+}
+
+/**
  * Format a compact ShardRecord into a full addressr-compatible AddressResponse.
  */
 export function formatAddressResponse(

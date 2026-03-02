@@ -1,5 +1,5 @@
 import { AwsClient } from "aws4fetch";
-import type { AddressShardData, LotDpShardData } from "../shared/types.js";
+import type { AddressShardData, LotDpShardData, StreetShardData } from "../shared/types.js";
 
 export interface S3BaseConfig {
   endpoint: string;
@@ -24,7 +24,7 @@ function getS3Client(config: S3BaseConfig): AwsClient {
 
 function shardUrl(
   config: S3Config,
-  type: "addresses" | "lotdp",
+  type: "addresses" | "lotdp" | "streets",
   prefix: string
 ): string {
   return `${config.endpoint}/${config.bucket}/gnaf/${config.gnafVersion}/${type}/${prefix}.json.gz`;
@@ -147,6 +147,38 @@ export async function fetchLotDpShard(
   const client = getS3Client(config);
   const json = await fetchAndDecompress(client, url);
   const data: LotDpShardData = JSON.parse(json);
+
+  const cacheResponse = new Response(json, {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=86400",
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+
+  return data;
+}
+
+/**
+ * Fetch a street shard from S3, with Cloudflare Cache API caching.
+ */
+export async function fetchStreetShard(
+  config: S3Config,
+  prefix: string,
+  ctx: ExecutionContext
+): Promise<StreetShardData> {
+  const url = shardUrl(config, "streets", prefix);
+  const cacheKey = new Request(url);
+  const cache = caches.default;
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return cached.json();
+  }
+
+  const client = getS3Client(config);
+  const json = await fetchAndDecompress(client, url);
+  const data: StreetShardData = JSON.parse(json);
 
   const cacheResponse = new Response(json, {
     headers: {
