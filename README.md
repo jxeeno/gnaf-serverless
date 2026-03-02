@@ -100,6 +100,24 @@ npm run pipeline:shard      # Hash-shard and gzip-compress records
 npm run pipeline:upload     # Upload shards to S3
 ```
 
+## Using Pre-built Data
+
+Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data. You can skip the pipeline entirely and upload the data directly to your own S3-compatible storage.
+
+1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
+2. Extract and upload to your bucket:
+   ```bash
+   tar -xf gnaf-shards-v20260301-gda2020.tar
+   # Upload to your S3 bucket under gnaf/v20260301-gda2020/
+   aws s3 sync . s3://your-bucket/gnaf/v20260301-gda2020/ --exclude metadata.json
+   aws s3 cp metadata.json s3://your-bucket/gnaf/v20260301-gda2020/metadata.json
+   ```
+3. Create a version pointer:
+   ```bash
+   echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://your-bucket/gnaf/latest.json
+   ```
+4. Set the `GNAF_VERSION` var in `wrangler.json` to match (e.g. `v20260301-gda2020`)
+
 ## Deployment
 
 Build and deploy the worker:
