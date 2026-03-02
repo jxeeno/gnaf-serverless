@@ -9,8 +9,7 @@ import {
   SHARDS_DIR,
   SHARD_PREFIX_LENGTH,
 } from "./config.js";
-import { toShardRecord, readAllRows } from "./shard.js";
-import { buildAddressPrefix } from "../../src/shared/address-format.js";
+import { readAllRows } from "./shard.js";
 import type { StreetAddressEntry } from "../../src/shared/types.js";
 
 const STREET_SHARDS_DIR = path.join(SHARDS_DIR, "streets");
@@ -57,6 +56,12 @@ function buildStreetKey(
   return `${streetName}|${streetType}|${streetSuffix}|${localityName}|${state}|${postcode}`;
 }
 
+/** Format elapsed time as "Xs" or "Xm Ys" */
+function elapsed(startMs: number): string {
+  const s = ((Date.now() - startMs) / 1000) | 0;
+  return s >= 60 ? `${(s / 60) | 0}m ${s % 60}s` : `${s}s`;
+}
+
 const INSERT_BATCH_SIZE = 200;
 
 /** Target max size per SQL chunk file (~2 MB) */
@@ -77,7 +82,72 @@ interface StreetEntry {
   digit_shards: string | null; // JSON object or null
 }
 
+/**
+ * SQL expression that replicates buildAddressPrefix() from address-format.ts.
+ *
+ * Computes the display prefix (everything before street name) from address components.
+ * Uses a CTE with intermediate line computations, then joins non-empty lines with ", ".
+ *
+ * Note: the 3-line merge rule in buildAddressPrefix (when exactly 3 prefix lines exist,
+ * merge first two) is a no-op when joining with ", " — the result is identical.
+ */
+const DISPLAY_PREFIX_SQL = `
+WITH base AS (
+  SELECT
+    gnaf_pid,
+    _street_key,
+    _street_shard,
+    CAST(number_first AS INTEGER) AS number_first,
+    CAST(flat_number AS INTEGER) AS flat_number,
+    CASE WHEN level_type_code IS NOT NULL OR level_number IS NOT NULL
+      THEN TRIM(
+        COALESCE(level_type_name, '') || ' ' ||
+        COALESCE(level_number_prefix, '') ||
+        COALESCE(CAST(level_number AS VARCHAR), '') ||
+        COALESCE(level_number_suffix, '')
+      )
+      ELSE '' END AS _level_line,
+    CASE WHEN flat_type_code IS NOT NULL OR flat_number IS NOT NULL
+      THEN TRIM(
+        COALESCE(flat_type_name, '') || ' ' ||
+        COALESCE(flat_number_prefix, '') ||
+        COALESCE(CAST(flat_number AS VARCHAR), '') ||
+        COALESCE(flat_number_suffix, '')
+      )
+      ELSE '' END AS _flat_line,
+    COALESCE(building_name, '') AS _bn_line,
+    CASE
+      WHEN number_first IS NOT NULL THEN
+        COALESCE(number_first_prefix, '') ||
+        CAST(number_first AS VARCHAR) ||
+        COALESCE(number_first_suffix, '') ||
+        CASE WHEN number_last IS NOT NULL
+          THEN '-' || COALESCE(number_last_prefix, '') ||
+               CAST(number_last AS VARCHAR) ||
+               COALESCE(number_last_suffix, '')
+          ELSE '' END
+      WHEN lot_number IS NOT NULL THEN
+        'LOT ' || COALESCE(lot_number_prefix, '') ||
+        lot_number ||
+        COALESCE(lot_number_suffix, '')
+      ELSE '' END AS _street_num
+  FROM addresses
+  WHERE alias_principal = 'P'
+)
+SELECT
+  gnaf_pid,
+  _street_key,
+  _street_shard,
+  number_first,
+  flat_number,
+  list_join(list_filter(
+    [_level_line, _flat_line, _bn_line, _street_num],
+    x -> x != ''
+  ), ', ') AS display_prefix
+FROM base`;
+
 export async function generateSearchIndex(): Promise<void> {
+  const t0 = Date.now();
   console.log(`Opening DuckDB at ${DUCKDB_PATH}...`);
   const instance = await DuckDBInstance.create(DUCKDB_PATH);
   const conn = await instance.connect();
@@ -88,7 +158,7 @@ export async function generateSearchIndex(): Promise<void> {
   await fsp.mkdir(SHARDS_DIR, { recursive: true });
   await fsp.mkdir(STREET_SHARDS_DIR, { recursive: true });
 
-  // --- Part 1: Build street entries and generate shards ---
+  // --- Part 1: Build street entries ---
 
   console.log("Querying unique street+locality combinations...");
   const streetResult = await conn.run(`
@@ -106,7 +176,7 @@ export async function generateSearchIndex(): Promise<void> {
     ORDER BY state, locality_name, street_name
   `);
   const streetRows = await readAllRows(streetResult);
-  console.log(`  Found ${streetRows.length} unique street+locality combinations`);
+  console.log(`  Found ${streetRows.length} unique street+locality combinations (${elapsed(t0)})`);
 
   // Build street entries (without digit_shards yet — computed during shard generation)
   const streets: StreetEntry[] = [];
@@ -149,6 +219,7 @@ export async function generateSearchIndex(): Promise<void> {
   }
 
   // --- Part 2: Generate street S3 shards ---
+  // Compute display_prefix in DuckDB SQL, then stream results in a single query
 
   console.log("Computing street shard prefixes...");
   await conn.run(
@@ -164,110 +235,116 @@ export async function generateSearchIndex(): Promise<void> {
   await conn.run(
     `UPDATE addresses SET _street_shard = LEFT(md5(_street_key), ${SHARD_PREFIX_LENGTH})`
   );
-  console.log("  Street shard prefixes computed");
+  console.log(`  Street shard prefixes computed (${elapsed(t0)})`);
 
-  // Discover non-empty street shard prefixes
-  console.log("Discovering non-empty street shard prefixes...");
-  const streetShardPrefixResult = await conn.run(
-    `SELECT DISTINCT _street_shard FROM addresses WHERE alias_principal = 'P' ORDER BY _street_shard`
-  );
-  const streetShardPrefixRows = await readAllRows(streetShardPrefixResult);
-  const streetShardPrefixes = streetShardPrefixRows.map(
-    (r) => r._street_shard as string
-  );
+  // Create pre-computed table with display_prefix computed in SQL
+  // This replaces: toShardRecord() + buildAddressPrefix() per row
+  console.log("Creating pre-computed street entries table...");
+  await conn.run(`CREATE TABLE _street_entries AS ${DISPLAY_PREFIX_SQL}`);
+  console.log(`  Pre-computed table created (${elapsed(t0)})`);
 
-  // Collect all shard data: map of shard_key → entries
-  // For small streets: shard_key = street_key
-  // For large streets: shard_key = street_key (un-numbered) + street_key|digit (numbered)
-  const allShardData = new Map<string, StreetAddressEntry[]>();
+  // Stream all entries in a single ordered query
+  console.log("Streaming street address entries...");
+  const entryResult = await conn.run(`
+    SELECT gnaf_pid, _street_key, display_prefix, number_first, flat_number
+    FROM _street_entries
+    ORDER BY _street_key
+  `);
 
+  // Collect entries grouped by street_key
+  const byStreetKey = new Map<string, StreetAddressEntry[]>();
   let totalStreetAddresses = 0;
-  let subShardedStreets = 0;
 
-  console.log(
-    `Processing ${streetShardPrefixes.length} shard prefixes...`
-  );
+  while (true) {
+    const chunk = await entryResult.fetchChunk();
+    if (!chunk || chunk.rowCount === 0) break;
 
-  for (const prefix of streetShardPrefixes) {
-    const result = await conn.run(
-      `SELECT * EXCLUDE (_addr_shard, _lotdp_shard, _street_key, _street_shard), _street_key FROM addresses WHERE _street_shard = '${prefix}' AND alias_principal = 'P'`
-    );
-    const rows = await readAllRows(result);
-    if (rows.length === 0) continue;
+    const pidCol = chunk.getColumnVector(0);
+    const skCol = chunk.getColumnVector(1);
+    const dpCol = chunk.getColumnVector(2);
+    const nfCol = chunk.getColumnVector(3);
+    const fnCol = chunk.getColumnVector(4);
 
-    // Group by street key
-    const byStreet = new Map<string, typeof rows>();
-    for (const row of rows) {
-      const streetKey = row._street_key as string;
-      if (!byStreet.has(streetKey)) byStreet.set(streetKey, []);
-      byStreet.get(streetKey)!.push(row);
+    for (let i = 0; i < chunk.rowCount; i++) {
+      const streetKey = skCol.getItem(i) as string;
+      const entry: StreetAddressEntry = {
+        p: pidCol.getItem(i) as string,
+        d: (dpCol.getItem(i) as string) ?? "",
+      };
+      const nf = nfCol.getItem(i) as number | null;
+      const fn = fnCol.getItem(i) as number | null;
+      if (nf != null) entry.n = nf;
+      if (fn != null) entry.f = fn;
+
+      let arr = byStreetKey.get(streetKey);
+      if (!arr) {
+        arr = [];
+        byStreetKey.set(streetKey, arr);
+      }
+      arr.push(entry);
+      totalStreetAddresses++;
     }
 
-    for (const [streetKey, streetRows] of byStreet) {
-      const needsSubSharding = streetRows.length > DIGIT_SHARD_THRESHOLD;
+    if (totalStreetAddresses % 100_000 < 2048) {
+      process.stdout.write(
+        `\r  ${totalStreetAddresses.toLocaleString()} addresses streamed (${elapsed(t0)})...`
+      );
+    }
+  }
+  console.log(
+    `\n  ${totalStreetAddresses.toLocaleString()} addresses streamed into ${byStreetKey.size} street groups (${elapsed(t0)})`
+  );
 
-      if (needsSubSharding) {
-        subShardedStreets++;
-        const digitBuckets = new Map<string, StreetAddressEntry[]>();
-        const unnumbered: StreetAddressEntry[] = [];
+  // Drop temporary table
+  await conn.run("DROP TABLE IF EXISTS _street_entries");
 
-        for (const row of streetRows) {
-          const pid = row.gnaf_pid as string;
-          const record = toShardRecord(row);
-          const d = buildAddressPrefix(record);
-          const entry: StreetAddressEntry = { p: pid, d };
-          if (record.nf != null) entry.n = record.nf;
-          if (record.fn != null) entry.f = record.fn;
+  // Process: sub-shard large streets, group by file prefix
+  console.log("Processing street groups and writing shard files...");
+  const allShardData = new Map<string, StreetAddressEntry[]>();
+  let subShardedStreets = 0;
 
-          if (record.nf != null) {
-            const digit = String(record.nf).charAt(0);
-            if (!digitBuckets.has(digit)) digitBuckets.set(digit, []);
-            digitBuckets.get(digit)!.push(entry);
-          } else {
-            unnumbered.push(entry);
-          }
+  for (const [streetKey, entries] of byStreetKey) {
+    if (entries.length > DIGIT_SHARD_THRESHOLD) {
+      subShardedStreets++;
+      const digitBuckets = new Map<string, StreetAddressEntry[]>();
+      const unnumbered: StreetAddressEntry[] = [];
+
+      for (const entry of entries) {
+        if (entry.n != null) {
+          const digit = String(entry.n).charAt(0);
+          if (!digitBuckets.has(digit)) digitBuckets.set(digit, []);
+          digitBuckets.get(digit)!.push(entry);
+        } else {
+          unnumbered.push(entry);
         }
-
-        // Store un-numbered under base key
-        if (unnumbered.length > 0) {
-          allShardData.set(streetKey, unnumbered);
-        }
-
-        // Store digit buckets under street_key|digit
-        const digitMap: Record<string, string> = {};
-        for (const [digit, entries] of digitBuckets) {
-          const subKey = `${streetKey}|${digit}`;
-          allShardData.set(subKey, entries);
-          digitMap[digit] = md5hex(subKey).substring(0, SHARD_PREFIX_LENGTH);
-        }
-
-        // Update the street entry with digit_shards info
-        const streetId = streetKeyToId.get(streetKey);
-        if (streetId != null) {
-          const streetEntry = streets[streetId - 1];
-          streetEntry.digit_shards = JSON.stringify(digitMap);
-        }
-      } else {
-        // Small street: all addresses under base key
-        const entries: StreetAddressEntry[] = [];
-        for (const row of streetRows) {
-          const pid = row.gnaf_pid as string;
-          const record = toShardRecord(row);
-          const d = buildAddressPrefix(record);
-          const entry: StreetAddressEntry = { p: pid, d };
-          if (record.nf != null) entry.n = record.nf;
-          if (record.fn != null) entry.f = record.fn;
-          entries.push(entry);
-        }
-        allShardData.set(streetKey, entries);
       }
 
-      totalStreetAddresses += streetRows.length;
+      // Store un-numbered under base key
+      if (unnumbered.length > 0) {
+        allShardData.set(streetKey, unnumbered);
+      }
+
+      // Store digit buckets under street_key|digit
+      const digitMap: Record<string, string> = {};
+      for (const [digit, digitEntries] of digitBuckets) {
+        const subKey = `${streetKey}|${digit}`;
+        allShardData.set(subKey, digitEntries);
+        digitMap[digit] = md5hex(subKey).substring(0, SHARD_PREFIX_LENGTH);
+      }
+
+      // Update the street entry with digit_shards info
+      const streetId = streetKeyToId.get(streetKey);
+      if (streetId != null) {
+        const streetEntry = streets[streetId - 1];
+        streetEntry.digit_shards = JSON.stringify(digitMap);
+      }
+    } else {
+      allShardData.set(streetKey, entries);
     }
   }
 
   console.log(
-    `  ${allShardData.size} shard keys (${subShardedStreets} streets sub-sharded, ${totalStreetAddresses} addresses total)`
+    `  ${allShardData.size} shard keys (${subShardedStreets} streets sub-sharded, ${totalStreetAddresses} addresses total) (${elapsed(t0)})`
   );
 
   // Write shard files: group shard entries by their hash prefix
@@ -288,13 +365,13 @@ export async function generateSearchIndex(): Promise<void> {
       compressed
     );
     shardFilesWritten++;
-    if (shardFilesWritten % 500 === 0) {
+    if (shardFilesWritten % 10 === 0) {
       console.log(
-        `  ${shardFilesWritten}/${byShardFile.size} shard files...`
+        `  ${shardFilesWritten}/${byShardFile.size} shard files (${elapsed(t0)})...`
       );
     }
   }
-  console.log(`  ${shardFilesWritten} street shard files written`);
+  console.log(`  ${shardFilesWritten} street shard files written (${elapsed(t0)})`);
 
   // --- Part 3: Generate D1 SQL (chunked into multiple files) ---
 
@@ -387,6 +464,7 @@ export async function generateSearchIndex(): Promise<void> {
   console.log(
     `Search index SQL written to ${SEARCH_INDEX_DIR}/ (${chunkIndex - 1} files, ${totalMb} MB total, ${streets.length} streets)`
   );
+  console.log(`Search index generation complete (${elapsed(t0)})`);
 
   conn.disconnectSync();
   instance.closeSync();
