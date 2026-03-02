@@ -64,9 +64,6 @@ function elapsed(startMs: number): string {
 
 const INSERT_BATCH_SIZE = 200;
 
-/** Target max size per SQL chunk file (~2 MB) */
-const CHUNK_MAX_BYTES = 2 * 1024 * 1024;
-
 interface StreetEntry {
   id: number;
   display: string;
@@ -80,6 +77,10 @@ interface StreetEntry {
   postcode: string;
   address_count: number;
   digit_shards: string | null; // JSON object or null
+  num_min: number | null;
+  num_max: number | null;
+  flat_min: number | null;
+  flat_max: number | null;
 }
 
 /**
@@ -98,7 +99,9 @@ WITH base AS (
     _street_key,
     _street_shard,
     CAST(number_first AS INTEGER) AS number_first,
+    CAST(number_last AS INTEGER) AS number_last,
     CAST(flat_number AS INTEGER) AS flat_number,
+    CAST(level_number AS INTEGER) AS level_number,
     CASE WHEN level_type_code IS NOT NULL OR level_number IS NOT NULL
       THEN TRIM(
         COALESCE(level_type_name, '') || ' ' ||
@@ -139,7 +142,9 @@ SELECT
   _street_key,
   _street_shard,
   number_first,
+  number_last,
   flat_number,
+  level_number,
   array_to_string(list_filter(
     [_level_line, _flat_line, _bn_line, _street_num],
     x -> x != ''
@@ -169,7 +174,11 @@ export async function generateSearchIndex(): Promise<void> {
       locality_name,
       state,
       COALESCE(postcode, '') AS postcode,
-      COUNT(*) AS address_count
+      COUNT(*) AS address_count,
+      MIN(CAST(number_first AS INTEGER)) AS num_min,
+      MAX(GREATEST(CAST(number_first AS INTEGER), CAST(number_last AS INTEGER))) AS num_max,
+      MIN(LEAST(CAST(flat_number AS INTEGER), CAST(level_number AS INTEGER))) AS flat_min,
+      MAX(GREATEST(CAST(flat_number AS INTEGER), CAST(level_number AS INTEGER))) AS flat_max
     FROM addresses
     WHERE alias_principal = 'P'
     GROUP BY street_name, street_type_abbrev, street_suffix_code, locality_name, state, postcode
@@ -213,6 +222,10 @@ export async function generateSearchIndex(): Promise<void> {
       postcode: pc,
       address_count: Number(row.address_count),
       digit_shards: null,
+      num_min: row.num_min != null ? Number(row.num_min) : null,
+      num_max: row.num_max != null ? Number(row.num_max) : null,
+      flat_min: row.flat_min != null ? Number(row.flat_min) : null,
+      flat_max: row.flat_max != null ? Number(row.flat_max) : null,
     });
 
     streetKeyToId.set(streetKey, id);
@@ -246,7 +259,7 @@ export async function generateSearchIndex(): Promise<void> {
   // Stream all entries in a single ordered query
   console.log("Streaming street address entries...");
   const entryResult = await conn.run(`
-    SELECT gnaf_pid, _street_key, display_prefix, number_first, flat_number
+    SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number
     FROM _street_entries
     ORDER BY _street_key
   `);
@@ -263,7 +276,9 @@ export async function generateSearchIndex(): Promise<void> {
     const skCol = chunk.getColumnVector(1);
     const dpCol = chunk.getColumnVector(2);
     const nfCol = chunk.getColumnVector(3);
-    const fnCol = chunk.getColumnVector(4);
+    const nlCol = chunk.getColumnVector(4);
+    const fnCol = chunk.getColumnVector(5);
+    const lnCol = chunk.getColumnVector(6);
 
     for (let i = 0; i < chunk.rowCount; i++) {
       const streetKey = skCol.getItem(i) as string;
@@ -272,9 +287,13 @@ export async function generateSearchIndex(): Promise<void> {
         d: (dpCol.getItem(i) as string) ?? "",
       };
       const nf = nfCol.getItem(i) as number | null;
+      const nl = nlCol.getItem(i) as number | null;
       const fn = fnCol.getItem(i) as number | null;
+      const ln = lnCol.getItem(i) as number | null;
       if (nf != null) entry.n = nf;
+      if (nl != null) entry.n2 = nl;
       if (fn != null) entry.f = fn;
+      if (ln != null) entry.l = ln;
 
       let arr = byStreetKey.get(streetKey);
       if (!arr) {
@@ -389,6 +408,7 @@ export async function generateSearchIndex(): Promise<void> {
   sqlStatements.push(`CREATE TABLE streets (
   id INTEGER PRIMARY KEY,
   display TEXT NOT NULL,
+  display_search TEXT NOT NULL,
   street_key TEXT NOT NULL,
   shard_prefix TEXT NOT NULL,
   street_name TEXT NOT NULL,
@@ -398,7 +418,11 @@ export async function generateSearchIndex(): Promise<void> {
   state TEXT NOT NULL,
   postcode TEXT,
   address_count INTEGER NOT NULL,
-  digit_shards TEXT
+  digit_shards TEXT,
+  num_min INTEGER,
+  num_max INTEGER,
+  flat_min INTEGER,
+  flat_max INTEGER
 );`);
 
   // Batch INSERT for streets
@@ -407,17 +431,23 @@ export async function generateSearchIndex(): Promise<void> {
     const values = batch
       .map(
         (s) =>
-          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"})`
+          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.display.replace(/'/g, ""))}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"},${s.num_min ?? "NULL"},${s.num_max ?? "NULL"},${s.flat_min ?? "NULL"},${s.flat_max ?? "NULL"})`
       )
       .join(",\n");
     sqlStatements.push(
-      `INSERT INTO streets (id,display,street_key,shard_prefix,street_name,street_type,street_suffix,locality_name,state,postcode,address_count,digit_shards) VALUES\n${values};`
+      `INSERT INTO streets (id,display,display_search,street_key,shard_prefix,street_name,street_type,street_suffix,locality_name,state,postcode,address_count,digit_shards,num_min,num_max,flat_min,flat_max) VALUES\n${values};`
     );
   }
 
+  // Index on street_name for efficient LIKE prefix queries (used for short single-token searches)
+  sqlStatements.push(
+    `CREATE INDEX idx_streets_name ON streets (street_name);`
+  );
+
   // Create FTS5 virtual table with external content
+  // Uses display_search (apostrophes stripped) so "O'DEA" → "ODEA" matches search queries
   sqlStatements.push(`CREATE VIRTUAL TABLE streets_fts USING fts5(
-  display,
+  display_search,
   content='streets',
   content_rowid='id',
   tokenize='unicode61 remove_diacritics 2'
@@ -428,41 +458,17 @@ export async function generateSearchIndex(): Promise<void> {
     "INSERT INTO streets_fts(streets_fts) VALUES('rebuild');"
   );
 
-  // Write chunked SQL files
+  // Write single SQL file (001.sql for backwards compatibility)
   await fsp.rm(SEARCH_INDEX_DIR, { recursive: true, force: true });
   await fsp.mkdir(SEARCH_INDEX_DIR, { recursive: true });
 
-  let chunkIndex = 1;
-  let chunkStatements: string[] = [];
-  let chunkBytes = 0;
-  let totalBytes = 0;
-
-  async function flushChunk() {
-    if (chunkStatements.length === 0) return;
-    const content = chunkStatements.join("\n\n") + "\n";
-    const fileName = String(chunkIndex).padStart(3, "0") + ".sql";
-    await fsp.writeFile(path.join(SEARCH_INDEX_DIR, fileName), content);
-    totalBytes += Buffer.byteLength(content);
-    chunkIndex++;
-    chunkStatements = [];
-    chunkBytes = 0;
-  }
-
-  for (const stmt of sqlStatements) {
-    const stmtBytes = Buffer.byteLength(stmt);
-    // Start a new chunk if adding this statement would exceed the limit
-    // (but always allow at least one statement per chunk)
-    if (chunkBytes > 0 && chunkBytes + stmtBytes > CHUNK_MAX_BYTES) {
-      await flushChunk();
-    }
-    chunkStatements.push(stmt);
-    chunkBytes += stmtBytes;
-  }
-  await flushChunk();
+  const content = sqlStatements.join("\n\n") + "\n";
+  await fsp.writeFile(path.join(SEARCH_INDEX_DIR, "001.sql"), content);
+  const totalBytes = Buffer.byteLength(content);
 
   const totalMb = (totalBytes / 1024 / 1024).toFixed(1);
   console.log(
-    `Search index SQL written to ${SEARCH_INDEX_DIR}/ (${chunkIndex - 1} files, ${totalMb} MB total, ${streets.length} streets)`
+    `Search index SQL written to ${SEARCH_INDEX_DIR}/001.sql (${totalMb} MB, ${streets.length} streets)`
   );
   console.log(`Search index generation complete (${elapsed(t0)})`);
 

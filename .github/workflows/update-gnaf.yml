@@ -39,13 +39,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Get latest GNAF version from CKAN
+        id: gnaf-version
+        run: |
+          RESOURCE_NAME=$(curl -sf 'https://data.gov.au/data/api/3/action/package_show?id=geocoded-national-address-file-g-naf' \
+            | jq -r --arg DATUM "$GNAF_DATUM" \
+              '.result.resources | map(select(.format == "ZIP" and .state == "active")) | sort_by(.last_modified // .created) | reverse | map(select(.name | ascii_upcase | contains($DATUM))) | first | .name')
+          echo "resource_name=$RESOURCE_NAME"
+          CACHE_KEY=$(echo "$RESOURCE_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          echo "cache_key=gnaf-zip-${CACHE_KEY}" >> "$GITHUB_OUTPUT"
+
       - name: Restore GNAF ZIP cache
         uses: actions/cache/restore@v4
         with:
           path: data/gnaf.zip
-          key: gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-${{ github.run_id }}
-          restore-keys: |
-            gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-
+          key: ${{ steps.gnaf-version.outputs.cache_key }}
 
       - name: Download GNAF data
         run: npm run pipeline:download
@@ -55,7 +63,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: data/gnaf.zip
-          key: gnaf-zip-${{ github.event.inputs.datum || 'GDA2020' }}-${{ github.run_id }}
+          key: ${{ steps.gnaf-version.outputs.cache_key }}
 
       - name: Import into DuckDB
         run: npm run pipeline:import

@@ -93,14 +93,14 @@ const STREET_TYPE_PAIRS: [string, string][] = [
 ];
 
 // Street suffixes: CODE → NAME
-const STREET_SUFFIX_PAIRS: [string, string][] = [
-  ["CN", "CENTRAL"], ["DE", "DEVIATION"], ["E", "EAST"],
-  ["EX", "EXTENSION"], ["IN", "INNER"], ["LR", "LOWER"],
-  ["ML", "MALL"], ["N", "NORTH"], ["NE", "NORTH EAST"],
-  ["NW", "NORTH WEST"], ["OF", "OFF"], ["OP", "OVERPASS"],
-  ["OT", "OUTER"], ["S", "SOUTH"], ["SE", "SOUTH EAST"],
-  ["SW", "SOUTH WEST"], ["UP", "UPPER"], ["W", "WEST"],
-];
+// const STREET_SUFFIX_PAIRS: [string, string][] = [
+//   ["CN", "CENTRAL"], ["DE", "DEVIATION"], ["E", "EAST"],
+//   ["EX", "EXTENSION"], ["IN", "INNER"], ["LR", "LOWER"],
+//   ["ML", "MALL"], ["N", "NORTH"], ["NE", "NORTH EAST"],
+//   ["NW", "NORTH WEST"], ["OF", "OFF"], ["OP", "OVERPASS"],
+//   ["OT", "OUTER"], ["S", "SOUTH"], ["SE", "SOUTH EAST"],
+//   ["SW", "SOUTH WEST"], ["UP", "UPPER"], ["W", "WEST"],
+// ];
 
 // Flat types: CODE (abbreviation) → NAME (full)
 const FLAT_TYPE_PAIRS: [string, string][] = [
@@ -132,7 +132,7 @@ const LEVEL_TYPE_PAIRS: [string, string][] = [
 
 const _synonyms: Record<string, string[]> = {
   ...buildSynonymMap(STREET_TYPE_PAIRS),
-  ...buildSynonymMap(STREET_SUFFIX_PAIRS),
+  // ...buildSynonymMap(STREET_SUFFIX_PAIRS),
   ...buildSynonymMap(FLAT_TYPE_PAIRS),
   ...buildSynonymMap(LEVEL_TYPE_PAIRS),
 };
@@ -193,4 +193,16 @@ export const FLAT_LEVEL_KEYWORDS: Set<string> = new Set([
   "FLAT", "FLT",     // FLAT + informal alias
   ...FLAT_TYPE_PAIRS.flat(),
   ...LEVEL_TYPE_PAIRS.flat(),
+]);
+
+/** Keywords that specifically indicate a level (as opposed to a flat/unit) */
+export const LEVEL_KEYWORDS: Set<string> = new Set(
+  LEVEL_TYPE_PAIRS.flat()
+);
+
+/** Keywords that specifically indicate a flat/unit (as opposed to a level) */
+export const FLAT_KEYWORDS: Set<string> = new Set([
+  "UNIT", "U", "UN",
+  "FLAT", "FLT",
+  ...FLAT_TYPE_PAIRS.flat(),
 ]);

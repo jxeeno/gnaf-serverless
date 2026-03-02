@@ -109,8 +109,12 @@ export interface StreetAddressEntry {
   d: string;
   /** number_first (for numeric matching) */
   n?: number;
+  /** number_last (for range matching, e.g., 99 in "95-99") */
+  n2?: number;
   /** flat_number (for numeric matching) */
   f?: number;
+  /** level_number (for numeric matching) */
+  l?: number;
 }
 
 /** A street shard file: map of street key → array of address entries */

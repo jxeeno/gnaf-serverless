@@ -232,6 +232,62 @@ describe("parseSearchQuery", () => {
     });
   });
 
+  describe("postcode filtering", () => {
+    it("filters trailing 4-digit postcode (1 CANBERRA AV, FORREST ACT 2603)", () => {
+      const r = parseSearchQuery("1 CANBERRA AV, FORREST ACT 2603")!;
+      expect(r.numTokens).toEqual(["1"]);
+      expect(r.streetHint).toBe(1);
+      expect(r.flatHint).toBeNull();
+    });
+
+    it("filters trailing postcode from long address (121 OLD CANTERBURY RD, DULWICH HILL NSW 2203)", () => {
+      const r = parseSearchQuery(
+        "121 OLD CANTERBURY RD, DULWICH HILL NSW 2203"
+      )!;
+      expect(r.numTokens).toEqual(["121"]);
+      expect(r.streetHint).toBe(121);
+      expect(r.flatHint).toBeNull();
+    });
+
+    it("filters postcode with slash notation (3/5 MURRAY ST, SYDNEY NSW 2000)", () => {
+      const r = parseSearchQuery("3/5 MURRAY ST, SYDNEY NSW 2000")!;
+      expect(r.numTokens).toEqual(["3", "5"]);
+      expect(r.flatHint).toBe(3);
+      expect(r.streetHint).toBe(5);
+    });
+
+    it("keeps 4-digit number before text tokens as potential street number", () => {
+      const r = parseSearchQuery("unit 3 2000 kent")!;
+      expect(r.numTokens).toEqual(["3", "2000"]);
+      expect(r.flatHint).toBe(3);
+      expect(r.streetHint).toBe(2000);
+    });
+
+    it("does not filter 3-digit numbers", () => {
+      const r = parseSearchQuery("346 kent 200")!;
+      expect(r.numTokens).toContain("346");
+    });
+
+    it("does not filter 5-digit numbers", () => {
+      const r = parseSearchQuery("1 kent 12345")!;
+      expect(r.numTokens).toContain("12345");
+    });
+
+    it("filters postcode even with unit keyword (unit 10, 99 york st, sydney NSW 2000)", () => {
+      const r = parseSearchQuery("unit 10, 99 york st, sydney NSW 2000")!;
+      expect(r.numTokens).toEqual(["10", "99"]);
+      expect(r.flatHint).toBe(10);
+      expect(r.streetHint).toBe(99);
+    });
+
+    it("keeps single 4-digit number when it is the only number", () => {
+      // "2000 kent" → 2000 is before text, so it's kept
+      const r = parseSearchQuery("2000 kent")!;
+      expect(r.numTokens).toEqual(["2000"]);
+      expect(r.streetHint).toBe(2000);
+    });
+  });
+
   describe("FTS5 query generation", () => {
     it("generates prefix search on last token", () => {
       const r = parseSearchQuery("murray")!;
@@ -783,6 +839,229 @@ describe("scoreAddress", () => {
       // n=12 matches, but displayStartsWith("12A") should check "12-12A"
       // "12-12A" doesn't start with "12A" or include ", 12A", so suffix doesn't match exactly → 90
       expect(scoreAddress(entry({ n: 12, d: "12-12A" }), parsedSuffix)).toBe(90);
+    });
+  });
+
+  describe("level number matching", () => {
+    it("level + street match → 200", () => {
+      const entry: StreetAddressEntry = {
+        p: "PID1",
+        d: "LEVEL 10, 99",
+        n: 99,
+        l: 10,
+      };
+      const parsed = parseSearchQuery("level 10, 99 york street sydney")!;
+      expect(scoreAddress(entry, parsed)).toBe(200);
+    });
+
+    it("street match with no flat/level on entry → 100", () => {
+      const entry: StreetAddressEntry = { p: "PID2", d: "99", n: 99 };
+      const parsed = parseSearchQuery("level 10, 99 york street sydney")!;
+      expect(scoreAddress(entry, parsed)).toBe(100);
+    });
+
+    it("street match with different level → 90", () => {
+      const entry: StreetAddressEntry = {
+        p: "PID3",
+        d: "LEVEL 5, 99",
+        n: 99,
+        l: 5,
+      };
+      const parsed = parseSearchQuery("level 10, 99 york street sydney")!;
+      expect(scoreAddress(entry, parsed)).toBe(90);
+    });
+
+    it("entry with matching level but no flat (level-only query) → 200", () => {
+      // Query "level 10" → levelHint=10, flatHint=null. Level matches, flat not asked.
+      const entry: StreetAddressEntry = {
+        p: "PID4",
+        d: "UNIT 3, LEVEL 10, 99",
+        n: 99,
+        f: 3,
+        l: 10,
+      };
+      const parsed = parseSearchQuery("level 10, 99 york")!;
+      expect(scoreAddress(entry, parsed)).toBe(200);
+    });
+
+    it("entry with wrong level scores 90 (street match, different sub-addr)", () => {
+      // Entry has f=10, l=5 but query asks for level 10 → l(5) != 10 → mismatch
+      const entry: StreetAddressEntry = {
+        p: "PID4b",
+        d: "UNIT 10, LEVEL 5, 99",
+        n: 99,
+        f: 10,
+        l: 5,
+      };
+      const parsed = parseSearchQuery("level 10, 99 york")!;
+      expect(scoreAddress(entry, parsed)).toBe(90);
+    });
+
+    it("level match only (no street match) → 70", () => {
+      const entry: StreetAddressEntry = {
+        p: "PID5",
+        d: "LEVEL 10, 50",
+        n: 50,
+        l: 10,
+      };
+      const parsed = parseSearchQuery("level 10, 99 york")!;
+      expect(scoreAddress(entry, parsed)).toBe(70);
+    });
+  });
+
+  describe("level + suite combined (e.g., 'LEVEL 10, SUITE 6, 95 YORK')", () => {
+    // Query: levelHint=10, flatHint=6, streetHint=95
+    const parsed = parseSearchQuery("LEVEL 10, SUITE 6, 95 YORK ST")!;
+
+    it("all match (level+suite+street) → 200", () => {
+      expect(
+        scoreAddress(
+          { p: "P1", d: "LEVEL 10, SUITE 6, 95", n: 95, f: 6, l: 10 },
+          parsed
+        )
+      ).toBe(200);
+    });
+
+    it("level match + street match, no flat on entry → 150 (partial)", () => {
+      expect(
+        scoreAddress(
+          { p: "P2", d: "LEVEL 10, 95", n: 95, l: 10 },
+          parsed
+        )
+      ).toBe(150);
+    });
+
+    it("flat match + street match, no level on entry → 150 (partial)", () => {
+      expect(
+        scoreAddress(
+          { p: "P3", d: "SUITE 6, 95", n: 95, f: 6 },
+          parsed
+        )
+      ).toBe(150);
+    });
+
+    it("street match, no sub-address on entry → 100", () => {
+      expect(
+        scoreAddress(
+          { p: "P4", d: "95", n: 95 },
+          parsed
+        )
+      ).toBe(100);
+    });
+
+    it("street match, wrong level → 90 (mismatch)", () => {
+      expect(
+        scoreAddress(
+          { p: "P5", d: "LEVEL 11, 95", n: 95, l: 11 },
+          parsed
+        )
+      ).toBe(90);
+    });
+
+    it("street match, wrong flat → 90 (mismatch)", () => {
+      expect(
+        scoreAddress(
+          { p: "P6", d: "SUITE 3, 95", n: 95, f: 3 },
+          parsed
+        )
+      ).toBe(90);
+    });
+
+    it("old shard data (f=6, no l field) → 150 (flat matches, level neutral)", () => {
+      // Simulates entry from S3 shard that doesn't have the l field yet
+      expect(
+        scoreAddress(
+          { p: "P7", d: "LEVEL 10, SUITE 6, 95", n: 95, f: 6 },
+          parsed
+        )
+      ).toBe(150);
+    });
+  });
+
+  describe("postcode does not affect scoring", () => {
+    it("'1 CANBERRA AV' with postcode → bare street match = 100", () => {
+      const parsed = parseSearchQuery("1 CANBERRA AV, FORREST ACT 2603")!;
+      expect(scoreAddress(entry({ n: 1, d: "1" }), parsed)).toBe(100);
+    });
+
+    it("UNIT 1 is not incorrectly boosted when postcode is stripped", () => {
+      const parsed = parseSearchQuery("1 CANBERRA AV, FORREST ACT 2603")!;
+      // flatHint=null, streetHint=1 → entry.n(28) != 1, entry.f(1) == streetHint(1) → 80
+      expect(
+        scoreAddress(entry({ n: 28, f: 1, d: "UNIT 1, 28" }), parsed)
+      ).toBe(80);
+    });
+  });
+
+  describe("number range matching (number_last / n2)", () => {
+    it("exact match on number_first scores normally", () => {
+      const parsed = parseSearchQuery("95 york st")!;
+      expect(
+        scoreAddress(entry({ n: 95, d: "95-99" }), parsed)
+      ).toBe(100);
+    });
+
+    it("streetHint within [n, n2] range scores as match", () => {
+      const parsed = parseSearchQuery("97 york st")!;
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
+      ).toBe(100);
+    });
+
+    it("streetHint equal to n2 (upper bound) scores as match", () => {
+      const parsed = parseSearchQuery("99 york st")!;
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
+      ).toBe(100);
+    });
+
+    it("streetHint outside range does not match as street number", () => {
+      const parsed = parseSearchQuery("100 york st")!;
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
+      ).toBe(0);
+    });
+
+    it("range match with sub-address hints scores correctly", () => {
+      const parsed = parseSearchQuery("level 10, suite 6, 97 york st")!;
+      // All match: street in range + level + flat
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, f: 6, l: 10, d: "LEVEL 10, SUITE 6, 95-99" }), parsed)
+      ).toBe(200);
+      // Street in range, partial sub-addr match
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, l: 10, d: "LEVEL 10, 95-99" }), parsed)
+      ).toBe(150);
+      // Street in range, no sub-addr
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
+      ).toBe(100);
+      // Street in range, sub-addr mismatch
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, l: 11, d: "LEVEL 11, 95-99" }), parsed)
+      ).toBe(90);
+    });
+
+    it("range match with flat/unit hint (no level)", () => {
+      const parsed = parseSearchQuery("3/97 york st")!;
+      expect(parsed.flatHint).toBe(3);
+      expect(parsed.streetHint).toBe(97);
+      // Flat match + street in range
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, f: 3, d: "UNIT 3, 95-99" }), parsed)
+      ).toBe(200);
+      // Street in range but no flat on entry
+      expect(
+        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
+      ).toBe(100);
+    });
+
+    it("entry without n2 only matches exact number_first", () => {
+      const parsed = parseSearchQuery("97 york st")!;
+      // n=95 without n2 — 97 does not match
+      expect(
+        scoreAddress(entry({ n: 95, d: "95" }), parsed)
+      ).toBe(0);
     });
   });
 

@@ -15,32 +15,32 @@
 Autocomplete address search. Returns matching streets and scored addresses.
 
 Supports:
-- Street name search: `canberra avenue` or `canberra av` (synonym expansion)
-- Street number: `113 canberra av`
-- Unit/flat: `3/113 canberra av`, `unit 3 113 canberra`, `apt 3 canberra`
+- Street name search: `macquarie street` or `macquarie st` (synonym expansion)
+- Street number: `1 macquarie st`
+- Unit/flat: `11/1 macquarie st`, `unit 11 1 macquarie`, `apt 11 macquarie`
 
 ```
-GET /api/addresses/search?q=113+canberra+av+griffith
+GET /api/addresses/search?q=1+macquarie+st+sydney
 ```
 
 ```json
 {
   "streets": [
     {
-      "streetId": 3008,
-      "display": "CANBERRA AV, GRIFFITH, ACT, 2603",
-      "streetName": "CANBERRA",
-      "locality": "GRIFFITH",
-      "state": "ACT",
-      "postcode": "2603",
-      "addressCount": 460
+      "streetId": 115321,
+      "display": "MACQUARIE ST, SYDNEY, NSW, 2000",
+      "streetName": "MACQUARIE",
+      "locality": "SYDNEY",
+      "state": "NSW",
+      "postcode": "2000",
+      "addressCount": 2343
     }
   ],
   "addresses": [
     {
-      "pid": "GAACT717940975",
-      "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
-      "streetId": 3008
+      "pid": "GANSW706597865",
+      "sla": "1 MACQUARIE ST, SYDNEY NSW 2000",
+      "streetId": 115321
     }
   ]
 }
@@ -52,43 +52,58 @@ List all addresses on a street (drill-down from search). Supports `?digit=N` for
 
 ### `GET /api/addresses/:pid`
 
-Look up a single address by GNAF PID.
+Look up a single address by GNAF PID. PIDs are prefixed by state:
 
 ```
-GET /api/addresses/GAACT717940975
+GET /api/addresses/GANSW706597865   # 1 MACQUARIE ST, SYDNEY NSW
+GET /api/addresses/GAVIC412717665   # 1 SPRING ST, MELBOURNE VIC
+GET /api/addresses/GAQLD425588765   # 100-102 GEORGE ST, BRISBANE CITY QLD
+GET /api/addresses/GAWA_148312575   # 1 HAY ST, PERTH WA
+GET /api/addresses/GATAS702241259   # 1 ELIZABETH ST, HOBART TAS
+GET /api/addresses/GAACT717940975   # 113 CANBERRA AV, GRIFFITH ACT
 ```
 
-### `GET /api/addresses?lotdp=:lotdp`
+### `GET /api/addresses?lpid=:lpid`
 
-Look up addresses by Lot/DP (legal parcel ID). May return multiple results.
+Look up addresses by legal parcel ID (LPID). May return multiple results. The `lotdp` query parameter is also accepted as an alias.
+
+Examples across states and parcel types:
 
 ```
-GET /api/addresses?lotdp=CANB/GRIF/25/14
+GET /api/addresses?lpid=21/633510           # NSW lot/deposited plan
+GET /api/addresses?lpid=CP/SP58841          # NSW strata plan
+GET /api/addresses?lpid=1\TP800196          # VIC title plan
+GET /api/addresses?lpid=3/CP882348          # QLD community plan
+GET /api/addresses?lpid=D073064/50          # WA deposited plan
+GET /api/addresses?lpid=114588/1            # TAS title reference
+GET /api/addresses?lpid=F/139775/A/3        # SA filing reference
+GET /api/addresses?lpid=200//8941/10        # NT lot/plan
+GET /api/addresses?lpid=CANB/GRIF/25/14     # ACT block/section
 ```
 
 ### Address Response Format
 
 ```json
 {
-  "pid": "GAACT717940975",
-  "lpid": "CANB/GRIF/25/14",
+  "pid": "GANSW706597865",
+  "lpid": "CP/SP58841",
   "precedence": "primary",
-  "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
-  "mla": ["113 CANBERRA AV", "GRIFFITH ACT 2603"],
+  "sla": "1 MACQUARIE ST, SYDNEY NSW 2000",
+  "mla": ["1 MACQUARIE ST", "SYDNEY NSW 2000"],
   "structured": {
     "confidence": 1,
-    "number": { "number": 113 },
-    "street": { "name": "CANBERRA", "type": { "code": "AV", "name": "AVENUE" } },
-    "locality": { "name": "GRIFFITH" },
-    "postcode": "2603",
-    "state": { "name": "AUSTRALIAN CAPITAL TERRITORY", "abbreviation": "ACT" }
+    "number": { "number": 1 },
+    "street": { "name": "MACQUARIE", "type": { "code": "ST", "name": "STREET" } },
+    "locality": { "name": "SYDNEY" },
+    "postcode": "2000",
+    "state": { "name": "NEW SOUTH WALES", "abbreviation": "NSW" }
   },
   "geocoding": {
     "level": { "code": "7", "name": "LOCALITY, STREET, ADDRESS" },
     "geocodes": [{
       "default": true,
-      "latitude": -35.32200812,
-      "longitude": 149.14668731,
+      "latitude": -33.85932705,
+      "longitude": 151.21320051,
       "type": { "code": "FCS", "name": "FRONTAGE CENTRE SETBACK" }
     }]
   }

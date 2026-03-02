@@ -30,6 +30,7 @@ type Bindings = {
 interface StreetRow {
   id: number;
   display: string;
+  display_search: string;
   street_key: string;
   shard_prefix: string;
   street_name: string;
@@ -40,11 +41,26 @@ interface StreetRow {
   postcode: string | null;
   address_count: number;
   digit_shards: string | null;
+  num_min: number | null;
+  num_max: number | null;
+  flat_min: number | null;
+  flat_max: number | null;
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use("/api/*", cors());
+app.use(
+  "/api/*",
+  cors({
+    origin: "*",
+    exposeHeaders: [
+      "X-D1-Rows-Read",
+      "X-D1-Duration-Ms",
+      "X-S3-Fetches",
+      "X-S3-Duration-Ms",
+    ],
+  })
+);
 
 app.onError((err, c) => {
   console.error("Unhandled error:", err.message, err.stack);
@@ -91,6 +107,9 @@ function entryToSla(entry: StreetAddressEntry, street: StreetRow): string {
   );
 }
 
+// Cache TTL for search responses (1 week — data only changes on GNAF version updates)
+const CACHE_TTL = 604800;
+
 // Health check
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
@@ -105,6 +124,14 @@ app.get("/api/addresses/search", async (c) => {
     );
   }
 
+  // Check CF Cache API first
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) {
+    return cachedResponse;
+  }
+
   const limit = Math.min(parseInt(c.req.query("limit") ?? "10", 10), 50);
 
   const parsed = parseSearchQuery(q);
@@ -116,25 +143,83 @@ app.get("/api/addresses/search", async (c) => {
     );
   }
 
-  const { numTokens, ftsQuery, streetHint, flatHint } = parsed;
+  const { numTokens, ftsQuery, streetHint, flatHint, levelHint } = parsed;
 
-  const db = c.env.SEARCH_DB;
+  const db = c.env.SEARCH_DB.withSession();
 
-  // Search FTS5 index — fetch more streets than limit to allow address scoring
-  const streetLimit = numTokens.length > 0 ? limit * 3 : limit;
-  const searchResults = await db
-    .prepare(
-      `SELECT s.id, s.display, s.street_key, s.shard_prefix, s.street_name,
-              s.street_type, s.street_suffix, s.locality_name, s.state,
-              s.postcode, s.address_count, s.digit_shards
-       FROM streets_fts AS fts
-       JOIN streets AS s ON s.id = fts.rowid
-       WHERE streets_fts MATCH ?1
-       ORDER BY rank
-       LIMIT ?2`
-    )
-    .bind(ftsQuery, streetLimit)
-    .all<StreetRow>();
+  // Search FTS5 index with combined ranking in SQL.
+  // The ORDER BY combines FTS5 rank (negative, lower = better) with bonuses for:
+  // 1. Street name exact match vs prefix-only match (e.g., "KENT" over "KENTUCKY")
+  // 2. Street number within the street's address range
+  // 3. Flat number within the street's flat range
+  // This ensures relevant streets aren't cut off by the LIMIT.
+  const streetLimit = numTokens.length > 0 ? Math.max(30, limit * 3) : limit;
+  // First text token is typically the street name — used for exact vs prefix matching
+  const firstTextToken = parsed.textTokens[0];
+
+  // Optimization: when there's only 1 short text token (e.g., "20 W"), skip FTS5 and
+  // use a direct street_name LIKE query with num_min/num_max WHERE filters. FTS5
+  // prefix scans like W* read hundreds of thousands of rows; a LIKE query on an
+  // indexed column is much cheaper. Number hints > 999 are truncated to the first
+  // 3 digits (e.g., 8012 → 801) to provide a rough range filter without being too
+  // restrictive for large numbers.
+  const useDirectQuery =
+    parsed.textTokens.length === 1 && firstTextToken.length < 2;
+
+  const rankingExpr = `
+         (
+           CASE WHEN s.street_name = ?4 THEN 100
+                WHEN s.street_name LIKE ?4 || '%' THEN 10
+           ELSE 0 END
+         )
+         + (
+           CASE WHEN ?2 IS NOT NULL AND s.num_min IS NOT NULL AND s.num_max IS NOT NULL THEN
+             CASE WHEN ?2 BETWEEN s.num_min AND s.num_max THEN 200 ELSE -50 END
+           ELSE 0 END
+         )
+         + (
+           CASE WHEN ?3 IS NOT NULL AND s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL THEN
+             CASE WHEN ?3 BETWEEN s.flat_min AND s.flat_max THEN 50 ELSE 0 END
+           ELSE 0 END
+         )`;
+
+  let searchResults: D1Result<StreetRow>;
+
+  if (useDirectQuery) {
+    // Truncate hints to first 3 digits for WHERE filter (e.g., 8012 → 801)
+    // This provides a rough range filter without being too restrictive for large numbers
+    const capTo3 = (n: number | null) =>
+      n != null && n > 999 ? parseInt(String(n).substring(0, 3), 10) : n;
+    searchResults = await db
+      .prepare(
+        `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
+                s.street_name, s.street_type, s.street_suffix, s.locality_name,
+                s.state, s.postcode, s.address_count, s.digit_shards,
+                s.num_min, s.num_max, s.flat_min, s.flat_max
+         FROM streets AS s
+         WHERE s.street_name LIKE ?1 || '%'
+           AND (?2 IS NULL OR (s.num_min IS NOT NULL AND s.num_max IS NOT NULL AND ?2 BETWEEN s.num_min AND s.num_max))
+           AND (?3 IS NULL OR (s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL AND ?3 BETWEEN s.flat_min AND s.flat_max))
+         LIMIT ?5`
+      )
+      .bind(firstTextToken, capTo3(streetHint), capTo3(flatHint ?? levelHint), firstTextToken, streetLimit)
+      .all<StreetRow>();
+  } else {
+    searchResults = await db
+      .prepare(
+        `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
+                s.street_name, s.street_type, s.street_suffix, s.locality_name,
+                s.state, s.postcode, s.address_count, s.digit_shards,
+                s.num_min, s.num_max, s.flat_min, s.flat_max
+         FROM streets_fts AS fts
+         JOIN streets AS s ON s.id = fts.rowid
+         WHERE streets_fts MATCH ?1
+         ORDER BY rank - (${rankingExpr})
+         LIMIT ?5`
+      )
+      .bind(ftsQuery, streetHint, flatHint ?? levelHint, firstTextToken, streetLimit)
+      .all<StreetRow>();
+  }
 
   if (!searchResults.results.length) {
     return c.json(
@@ -144,6 +229,7 @@ app.get("/api/addresses/search", async (c) => {
     );
   }
 
+  // Streets are already ranked by SQL (FTS rank + number range + exact match bonuses)
   const matchedStreets = searchResults.results;
 
   // Build street results
@@ -199,11 +285,13 @@ app.get("/api/addresses/search", async (c) => {
 
   // Fetch all needed shard files in parallel
   const fetchEntries = Array.from(shardFetches.entries());
+  const s3Start = Date.now();
   const shardResults = await Promise.all(
     fetchEntries.map(([prefix]) =>
       fetchStreetShard(config, prefix, c.executionCtx)
     )
   );
+  const s3Duration = Date.now() - s3Start;
 
   // Collect all address entries with their street metadata
   interface ScoredAddress {
@@ -254,16 +342,26 @@ app.get("/api/addresses/search", async (c) => {
   // Sort by score descending, take top results
   scoredAddresses.sort((a, b) => b.score - a.score);
 
-  // When no numbers, limit to 1 per street for representative results
+  // When no numbers, first pick 1 per street for variety, then backfill remaining
+  // slots with additional addresses from the same streets (highest scored first).
+  // This means "example street villawood" (1 matching street) returns up to `limit`
+  // addresses, while "kent" (many streets) shows variety first then backfills.
   let addressResults: ScoredAddress[];
   if (numTokens.length === 0) {
     const seenStreets = new Set<number>();
-    addressResults = [];
+    const firstPass: ScoredAddress[] = [];
+    const remainder: ScoredAddress[] = [];
     for (const addr of scoredAddresses) {
-      if (seenStreets.has(addr.streetId)) continue;
-      seenStreets.add(addr.streetId);
-      addressResults.push(addr);
-      if (addressResults.length >= limit) break;
+      if (!seenStreets.has(addr.streetId)) {
+        seenStreets.add(addr.streetId);
+        firstPass.push(addr);
+      } else {
+        remainder.push(addr);
+      }
+    }
+    addressResults = firstPass.slice(0, limit);
+    if (addressResults.length < limit) {
+      addressResults.push(...remainder.slice(0, limit - addressResults.length));
     }
   } else {
     addressResults = scoredAddresses.slice(0, limit);
@@ -275,15 +373,35 @@ app.get("/api/addresses/search", async (c) => {
     streetId: a.streetId,
   }));
 
-  return c.json(
+  const d1RowsRead = searchResults.meta?.rows_read ?? 0;
+  const d1Duration = searchResults.meta?.duration ?? 0;
+  const s3Fetches = fetchEntries.length;
+
+  const response = c.json(
     { streets, addresses },
     200,
-    { "Cache-Control": "public, max-age=604800" }
+    {
+      "Cache-Control": `public, max-age=${CACHE_TTL}`,
+      "X-D1-Rows-Read": String(d1RowsRead),
+      "X-D1-Duration-Ms": String(d1Duration),
+      "X-S3-Fetches": String(s3Fetches),
+      "X-S3-Duration-Ms": String(s3Duration),
+    }
   );
+
+  // Store in CF Cache API (non-blocking)
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+
+  return response;
 });
 
 // Get address by GNAF PID
 app.get("/api/addresses/:pid", async (c) => {
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
   const pid = c.req.param("pid").toUpperCase();
   const config = await resolveS3Config(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
@@ -300,35 +418,42 @@ app.get("/api/addresses/:pid", async (c) => {
     return c.json({ error: "Address not found", pid }, 404);
   }
 
-  const response = formatAddressResponse(pid, record);
-  return c.json(response, 200, {
-    "Cache-Control": "public, max-age=604800",
+  const body = formatAddressResponse(pid, record);
+  const response = c.json(body, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
   });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
-// Lookup addresses by lot/DP reference
+// Lookup addresses by legal parcel ID (lpid). Also accepts "lotdp" for backwards compat.
 app.get("/api/addresses", async (c) => {
-  const lotdp = c.req.query("lotdp");
-  if (!lotdp) {
+  const lpid = c.req.query("lpid") ?? c.req.query("lotdp");
+  if (!lpid) {
     return c.json(
-      { error: "Missing required query parameter: lotdp" },
+      { error: "Missing required query parameter: lpid" },
       400
     );
   }
 
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
   const config = await resolveS3Config(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
-  const lotdpShardPrefix = md5hex(lotdp).substring(0, prefixLen);
+  const lpidShardPrefix = md5hex(lpid).substring(0, prefixLen);
 
-  const lotdpIndex = await fetchLotDpShard(
+  const lpidIndex = await fetchLotDpShard(
     config,
-    lotdpShardPrefix,
+    lpidShardPrefix,
     c.executionCtx
   );
-  const pids = lotdpIndex[lotdp];
+  const pids = lpidIndex[lpid];
 
   if (!pids?.length) {
-    return c.json({ error: "No addresses found for lot/DP", lotdp }, 404);
+    return c.json({ error: "No addresses found for LPID", lpid }, 404);
   }
 
   // Group PIDs by their address shard prefix to minimize shard fetches
@@ -363,16 +488,23 @@ app.get("/api/addresses", async (c) => {
   }
 
   if (addresses.length === 0) {
-    return c.json({ error: "No addresses found for lot/DP", lotdp }, 404);
+    return c.json({ error: "No addresses found for LPID", lpid }, 404);
   }
 
-  return c.json(addresses, 200, {
-    "Cache-Control": "public, max-age=604800",
+  const response = c.json(addresses, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
   });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
 // Get all addresses on a street (for drill-down after search)
 app.get("/api/streets/:streetId/addresses", async (c) => {
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
   const streetId = parseInt(c.req.param("streetId"), 10);
   if (isNaN(streetId)) {
     return c.json({ error: "Invalid street ID" }, 400);
@@ -380,7 +512,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
 
   const digit = c.req.query("digit");
 
-  const db = c.env.SEARCH_DB;
+  const db = c.env.SEARCH_DB.withSession();
 
   // Look up the street from D1
   const street = await db
@@ -468,9 +600,11 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
     return c.json({ error: "No addresses found for street", streetId }, 404);
   }
 
-  return c.json(addresses, 200, {
-    "Cache-Control": "public, max-age=604800",
+  const response = c.json(addresses, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
   });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 });
 
 export default app;
