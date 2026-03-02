@@ -18,14 +18,16 @@ on:
 permissions:
   contents: write
 
+env:
+  NODE_OPTIONS: '--max-old-space-size=4096'
+  SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
+  GNAF_DATUM: ${{ github.event.inputs.datum || 'GDA2020' }}
+
 jobs:
-  update:
+  # ── Stage 1: Download GNAF and import into DuckDB ──────────────────────
+  build-db:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    env:
-      NODE_OPTIONS: '--max-old-space-size=4096'
-      SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
-      GNAF_DATUM: ${{ github.event.inputs.datum || 'GDA2020' }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -58,11 +60,112 @@ jobs:
       - name: Import into DuckDB
         run: npm run pipeline:import
 
+      - name: Upload DuckDB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnaf-duckdb
+          path: data/gnaf.duckdb
+          retention-days: 1
+          compression-level: 1
+
+  # ── Stage 2a: Generate address + lot/DP shards (parallel) ──────────────
+  shard:
+    needs: build-db
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download DuckDB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gnaf-duckdb
+          path: data
+
       - name: Shard data
         run: npm run pipeline:shard
 
+      - name: Upload shard artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnaf-shards
+          path: |
+            data/shards/addresses/
+            data/shards/lotdp/
+            data/shards/metadata.json
+          retention-days: 1
+          compression-level: 1
+
+  # ── Stage 2b: Generate street shards + D1 search index (parallel) ──────
+  search-index:
+    needs: build-db
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download DuckDB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gnaf-duckdb
+          path: data
+
       - name: Generate search index
         run: npm run pipeline:search-index
+
+      - name: Upload search index artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gnaf-search-index
+          path: |
+            data/shards/streets/
+            data/shards/search-index/
+          retention-days: 1
+          compression-level: 1
+
+  # ── Stage 3: Release, upload to S3, import D1 ─────────────────────────
+  release:
+    needs: [shard, search-index]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gnaf-shards
+          path: data/shards
+
+      - name: Download search index artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: gnaf-search-index
+          path: data/shards
 
       - name: Read metadata
         id: meta
@@ -143,3 +246,12 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Delete artifacts
+        if: always()
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            gnaf-duckdb
+            gnaf-shards
+            gnaf-search-index
