@@ -140,7 +140,7 @@ SELECT
   _street_shard,
   number_first,
   flat_number,
-  list_join(list_filter(
+  array_to_string(list_filter(
     [_level_line, _flat_line, _bn_line, _street_num],
     x -> x != ''
   ), ', ') AS display_prefix
@@ -365,7 +365,7 @@ export async function generateSearchIndex(): Promise<void> {
       compressed
     );
     shardFilesWritten++;
-    if (shardFilesWritten % 10 === 0) {
+    if (shardFilesWritten % 100 === 0) {
       console.log(
         `  ${shardFilesWritten}/${byShardFile.size} shard files (${elapsed(t0)})...`
       );
