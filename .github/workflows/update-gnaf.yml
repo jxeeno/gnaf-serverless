@@ -236,7 +236,7 @@ jobs:
             --notes-file release-notes.md \
             gnaf-shards-${{ steps.meta.outputs.version }}.tar
 
-      - name: Upload to S3
+      - name: Upload to R2
         run: npm run pipeline:upload
         env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}

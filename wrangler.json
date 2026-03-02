@@ -37,5 +37,12 @@
 			"database_name": "gnaf-search",
 			"database_id": "b3061346-8fd8-4fc2-bbaa-1f3af23d4759"
 		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "GNAF_BUCKET",
+			"bucket_name": "gnaf-data",
+			"remote": true
+		}
 	]
 }

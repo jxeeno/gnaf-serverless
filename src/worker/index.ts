@@ -12,16 +12,10 @@ import {
   fetchLotDpShard,
   fetchStreetShard,
   fetchLatestVersion,
-  type S3BaseConfig,
-  type S3Config,
-} from "./s3.js";
+} from "./r2.js";
 
 type Bindings = {
-  S3_ENDPOINT: string;
-  S3_BUCKET: string;
-  S3_ACCESS_KEY_ID: string;
-  S3_SECRET_ACCESS_KEY: string;
-  S3_REGION: string;
+  GNAF_BUCKET: R2Bucket;
   GNAF_VERSION?: string;
   SHARD_PREFIX_LENGTH: string;
   SEARCH_DB: D1Database;
@@ -56,8 +50,8 @@ app.use(
     exposeHeaders: [
       "X-D1-Rows-Read",
       "X-D1-Duration-Ms",
-      "X-S3-Fetches",
-      "X-S3-Duration-Ms",
+      "X-R2-Fetches",
+      "X-R2-Duration-Ms",
     ],
   })
 );
@@ -71,23 +65,11 @@ function md5hex(input: string): string {
   return createHash("md5").update(input).digest("hex");
 }
 
-function getBaseS3Config(env: Bindings): S3BaseConfig {
-  return {
-    endpoint: env.S3_ENDPOINT,
-    bucket: env.S3_BUCKET,
-    accessKeyId: env.S3_ACCESS_KEY_ID,
-    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-    region: env.S3_REGION ?? "auto",
-  };
-}
-
-async function resolveS3Config(
+async function resolveGnafVersion(
   env: Bindings,
   ctx: ExecutionContext
-): Promise<S3Config> {
-  const base = getBaseS3Config(env);
-  const version = env.GNAF_VERSION || (await fetchLatestVersion(base, ctx));
-  return { ...base, gnafVersion: version };
+): Promise<string> {
+  return env.GNAF_VERSION || (await fetchLatestVersion(env.GNAF_BUCKET, ctx));
 }
 
 function getShardPrefixLength(env: Bindings): number {
@@ -244,7 +226,7 @@ app.get("/api/addresses/search", async (c) => {
   }));
 
   // Fetch addresses from street shards
-  const config = await resolveS3Config(c.env, c.executionCtx);
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
 
   // Determine which shard prefixes to fetch
   const shardFetches = new Map<string, string[]>(); // shardPrefix → [shardKey, ...]
@@ -288,7 +270,7 @@ app.get("/api/addresses/search", async (c) => {
   const s3Start = Date.now();
   const shardResults = await Promise.all(
     fetchEntries.map(([prefix]) =>
-      fetchStreetShard(config, prefix, c.executionCtx)
+      fetchStreetShard(c.env.GNAF_BUCKET, gnafVersion, prefix, c.executionCtx)
     )
   );
   const s3Duration = Date.now() - s3Start;
@@ -384,8 +366,8 @@ app.get("/api/addresses/search", async (c) => {
       "Cache-Control": `public, max-age=${CACHE_TTL}`,
       "X-D1-Rows-Read": String(d1RowsRead),
       "X-D1-Duration-Ms": String(d1Duration),
-      "X-S3-Fetches": String(s3Fetches),
-      "X-S3-Duration-Ms": String(s3Duration),
+      "X-R2-Fetches": String(s3Fetches),
+      "X-R2-Duration-Ms": String(s3Duration),
     }
   );
 
@@ -403,12 +385,13 @@ app.get("/api/addresses/:pid", async (c) => {
   if (cachedResponse) return cachedResponse;
 
   const pid = c.req.param("pid").toUpperCase();
-  const config = await resolveS3Config(c.env, c.executionCtx);
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const shardPrefix = md5hex(pid).substring(0, prefixLen);
 
   const shardData = await fetchAddressShard(
-    config,
+    c.env.GNAF_BUCKET,
+    gnafVersion,
     shardPrefix,
     c.executionCtx
   );
@@ -441,12 +424,13 @@ app.get("/api/addresses", async (c) => {
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
-  const config = await resolveS3Config(c.env, c.executionCtx);
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const lpidShardPrefix = md5hex(lpid).substring(0, prefixLen);
 
   const lpidIndex = await fetchLotDpShard(
-    config,
+    c.env.GNAF_BUCKET,
+    gnafVersion,
     lpidShardPrefix,
     c.executionCtx
   );
@@ -470,7 +454,7 @@ app.get("/api/addresses", async (c) => {
   const shardEntries = Array.from(pidsByShardPrefix.entries());
   const shardResults = await Promise.all(
     shardEntries.map(([prefix]) =>
-      fetchAddressShard(config, prefix, c.executionCtx)
+      fetchAddressShard(c.env.GNAF_BUCKET, gnafVersion, prefix, c.executionCtx)
     )
   );
 
@@ -528,7 +512,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
     return c.json({ error: "Street not found", streetId }, 404);
   }
 
-  const config = await resolveS3Config(c.env, c.executionCtx);
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
 
   // Determine which shard keys to fetch
   const keysToFetch: { shardPrefix: string; shardKey: string }[] = [];
@@ -575,7 +559,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
   const uniquePrefixes = [...new Set(keysToFetch.map((k) => k.shardPrefix))];
   const shardResults = await Promise.all(
     uniquePrefixes.map((prefix) =>
-      fetchStreetShard(config, prefix, c.executionCtx)
+      fetchStreetShard(c.env.GNAF_BUCKET, gnafVersion, prefix, c.executionCtx)
     )
   );
   const shardByPrefix = new Map(

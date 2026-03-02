@@ -1,12 +1,12 @@
 # GNAF Serverless Lookup
 
-**Proof of concept** — serverless Australian address lookup API with autocomplete, powered by the [Geocoded National Address File (G-NAF)](https://data.gov.au/dataset/geocoded-national-address-file-g-naf). Runs on Cloudflare Workers with data stored in S3-compatible object storage and a D1 search index.
+**Proof of concept** — serverless Australian address lookup API with autocomplete, powered by the [Geocoded National Address File (G-NAF)](https://data.gov.au/dataset/geocoded-national-address-file-g-naf). Runs on Cloudflare Workers with data stored in R2 object storage and a D1 search index.
 
 ## How It Works
 
-1. A **data pipeline** downloads GNAF from data.gov.au, denormalizes it with DuckDB, shards the data by MD5-hashed keys, gzip-compresses each shard, and uploads to S3-compatible object storage. It also generates a street search index for Cloudflare D1.
-2. A **Cloudflare Worker** serves API requests — autocomplete search uses D1 (FTS5) for street matching and S3 shards for address scoring, while direct lookups fetch the relevant shard from S3.
-3. A **React frontend** provides address autocomplete search, direct GNAF PID lookup, and Lot/DP reference lookup.
+1. A **data pipeline** downloads GNAF from data.gov.au, denormalizes it with DuckDB, shards the data by MD5-hashed keys, gzip-compresses each shard, and uploads to Cloudflare R2. It also generates a street search index for Cloudflare D1.
+2. A **Cloudflare Worker** serves API requests — autocomplete search uses D1 (FTS5) for street matching and R2 shards for address scoring, while direct lookups fetch the relevant shard from R2 via native bindings.
+3. A **React frontend** provides address autocomplete search, direct GNAF PID lookup, and LPID lookup.
 
 ## API
 
@@ -134,11 +134,11 @@ The pipeline downloads, processes, and uploads GNAF data. It runs via GitHub Act
 
 | Variable | Description |
 |---|---|
-| `S3_ENDPOINT` | S3-compatible endpoint URL |
+| `S3_ENDPOINT` | R2 S3-compatible endpoint URL (`https://<account_id>.r2.cloudflarestorage.com`) |
 | `S3_REGION` | S3 region (default: `auto`) |
-| `S3_BUCKET` | S3 bucket name |
-| `S3_ACCESS_KEY_ID` | S3 access key |
-| `S3_SECRET_ACCESS_KEY` | S3 secret key |
+| `S3_BUCKET` | R2 bucket name |
+| `S3_ACCESS_KEY_ID` | R2 API token access key ID |
+| `S3_SECRET_ACCESS_KEY` | R2 API token secret access key |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token (for D1 remote access) |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
 | `SHARD_PREFIX_LENGTH` | Hex chars for shard key (default: `3`, giving 4096 shards) |
@@ -155,7 +155,7 @@ npm run pipeline:download      # Download GNAF ZIP from data.gov.au
 npm run pipeline:import        # Import PSVs into DuckDB and denormalize
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
-npm run pipeline:upload        # Upload shards to S3
+npm run pipeline:upload        # Upload shards to R2
 ```
 
 ### Loading the Search Index
@@ -179,15 +179,21 @@ done
 Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index. You can skip the pipeline and upload directly.
 
 1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
-2. Extract and upload to your bucket:
+2. Create the R2 bucket and extract/upload:
    ```bash
+   npx wrangler r2 bucket create gnaf-data
    tar -xf gnaf-shards-v20260301-gda2020.tar
-   aws s3 sync . s3://your-bucket/gnaf/v20260301-gda2020/ --exclude metadata.json --exclude 'search-index/*'
-   aws s3 cp metadata.json s3://your-bucket/gnaf/v20260301-gda2020/metadata.json
+   # Upload via R2's S3-compatible API
+   aws s3 sync . s3://gnaf-data/gnaf/v20260301-gda2020/ \
+     --endpoint-url https://<account_id>.r2.cloudflarestorage.com \
+     --exclude metadata.json --exclude 'search-index/*'
+   aws s3 cp metadata.json s3://gnaf-data/gnaf/v20260301-gda2020/metadata.json \
+     --endpoint-url https://<account_id>.r2.cloudflarestorage.com
    ```
 3. Create a version pointer:
    ```bash
-   echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://your-bucket/gnaf/latest.json
+   echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://gnaf-data/gnaf/latest.json \
+     --endpoint-url https://<account_id>.r2.cloudflarestorage.com
    ```
 4. Load the search index into D1:
    ```bash
@@ -207,12 +213,7 @@ npm run build
 npm run deploy
 ```
 
-Set S3 credentials as Wrangler secrets:
-
-```bash
-npx wrangler secret put S3_ACCESS_KEY_ID
-npx wrangler secret put S3_SECRET_ACCESS_KEY
-```
+The worker uses a native R2 binding (`GNAF_BUCKET`) configured in `wrangler.json` — no secrets are needed for data access.
 
 ## Tech Stack
 
@@ -221,7 +222,7 @@ npx wrangler secret put S3_SECRET_ACCESS_KEY
 - **Search**: Cloudflare D1 (SQLite FTS5) with synonym expansion
 - **Frontend**: React, Tailwind CSS, shadcn/ui, Leaflet
 - **Data Processing**: DuckDB, TypeScript (tsx)
-- **Storage**: S3-compatible object storage
+- **Storage**: Cloudflare R2 (native binding)
 - **Build**: Vite
 
 ## License

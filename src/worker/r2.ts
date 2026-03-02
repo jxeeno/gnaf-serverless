@@ -1,49 +1,13 @@
-import { AwsClient } from "aws4fetch";
 import type { AddressShardData, LotDpShardData, StreetShardData } from "../shared/types.js";
 
-export interface S3BaseConfig {
-  endpoint: string;
-  bucket: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  region: string;
-}
-
-export interface S3Config extends S3BaseConfig {
-  gnafVersion: string;
-}
-
-function getS3Client(config: S3BaseConfig): AwsClient {
-  return new AwsClient({
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    region: config.region,
-    service: "s3",
-  });
-}
-
-function shardUrl(
-  config: S3Config,
-  type: "addresses" | "lotdp" | "streets",
-  prefix: string
-): string {
-  return `${config.endpoint}/${config.bucket}/gnaf/${config.gnafVersion}/${type}/${prefix}.json.gz`;
-}
-
 async function fetchAndDecompress(
-  client: AwsClient,
-  url: string
+  bucket: R2Bucket,
+  key: string
 ): Promise<string> {
-  const res = await client.fetch(url);
-  if (!res.ok) {
-    if (res.status === 404) {
-      return "{}";
-    }
-    throw new Error(`S3 fetch failed: ${res.status} ${res.statusText} for ${url}`);
-  }
+  const obj = await bucket.get(key);
+  if (!obj) return "{}";
 
-  const arrayBuf = await res.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuf);
+  const bytes = new Uint8Array(await obj.arrayBuffer());
 
   // Check gzip magic bytes (0x1f 0x8b) to determine if decompression is needed
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
@@ -56,15 +20,15 @@ async function fetchAndDecompress(
 }
 
 /**
- * Fetch the latest GNAF version string from gnaf/latest.json in S3.
+ * Fetch the latest GNAF version string from gnaf/latest.json in R2.
  * Cached for 1 hour.
  */
 export async function fetchLatestVersion(
-  config: S3BaseConfig,
+  bucket: R2Bucket,
   ctx: ExecutionContext
 ): Promise<string> {
-  const url = `${config.endpoint}/${config.bucket}/gnaf/latest.json`;
-  const cacheKey = new Request(url);
+  const cacheUrl = "https://r2-cache/gnaf/latest.json";
+  const cacheKey = new Request(cacheUrl);
   const cache = caches.default;
 
   const cached = await cache.match(cacheKey);
@@ -73,13 +37,12 @@ export async function fetchLatestVersion(
     return data.version;
   }
 
-  const client = getS3Client(config);
-  const res = await client.fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch latest.json: ${res.status} ${res.statusText}`);
+  const obj = await bucket.get("gnaf/latest.json");
+  if (!obj) {
+    throw new Error("Failed to fetch latest.json from R2");
   }
 
-  const json = await res.text();
+  const json = await obj.text();
   const data = JSON.parse(json) as { version: string };
 
   const cacheResponse = new Response(json, {
@@ -94,28 +57,27 @@ export async function fetchLatestVersion(
 }
 
 /**
- * Fetch an address shard from S3, with Cloudflare Cache API caching.
+ * Fetch an address shard from R2, with Cloudflare Cache API caching.
  */
 export async function fetchAddressShard(
-  config: S3Config,
+  bucket: R2Bucket,
+  version: string,
   prefix: string,
   ctx: ExecutionContext
 ): Promise<AddressShardData> {
-  const url = shardUrl(config, "addresses", prefix);
-  const cacheKey = new Request(url);
+  const r2Key = `gnaf/${version}/addresses/${prefix}.json.gz`;
+  const cacheUrl = `https://r2-cache/${r2Key}`;
+  const cacheKey = new Request(cacheUrl);
   const cache = caches.default;
 
-  // Check cache first
   const cached = await cache.match(cacheKey);
   if (cached) {
     return cached.json();
   }
 
-  const client = getS3Client(config);
-  const json = await fetchAndDecompress(client, url);
+  const json = await fetchAndDecompress(bucket, r2Key);
   const data: AddressShardData = JSON.parse(json);
 
-  // Cache the decompressed result
   const cacheResponse = new Response(json, {
     headers: {
       "Content-Type": "application/json",
@@ -128,15 +90,17 @@ export async function fetchAddressShard(
 }
 
 /**
- * Fetch a lot/DP shard from S3, with Cloudflare Cache API caching.
+ * Fetch a lot/DP shard from R2, with Cloudflare Cache API caching.
  */
 export async function fetchLotDpShard(
-  config: S3Config,
+  bucket: R2Bucket,
+  version: string,
   prefix: string,
   ctx: ExecutionContext
 ): Promise<LotDpShardData> {
-  const url = shardUrl(config, "lotdp", prefix);
-  const cacheKey = new Request(url);
+  const r2Key = `gnaf/${version}/lotdp/${prefix}.json.gz`;
+  const cacheUrl = `https://r2-cache/${r2Key}`;
+  const cacheKey = new Request(cacheUrl);
   const cache = caches.default;
 
   const cached = await cache.match(cacheKey);
@@ -144,8 +108,7 @@ export async function fetchLotDpShard(
     return cached.json();
   }
 
-  const client = getS3Client(config);
-  const json = await fetchAndDecompress(client, url);
+  const json = await fetchAndDecompress(bucket, r2Key);
   const data: LotDpShardData = JSON.parse(json);
 
   const cacheResponse = new Response(json, {
@@ -160,15 +123,17 @@ export async function fetchLotDpShard(
 }
 
 /**
- * Fetch a street shard from S3, with Cloudflare Cache API caching.
+ * Fetch a street shard from R2, with Cloudflare Cache API caching.
  */
 export async function fetchStreetShard(
-  config: S3Config,
+  bucket: R2Bucket,
+  version: string,
   prefix: string,
   ctx: ExecutionContext
 ): Promise<StreetShardData> {
-  const url = shardUrl(config, "streets", prefix);
-  const cacheKey = new Request(url);
+  const r2Key = `gnaf/${version}/streets/${prefix}.json.gz`;
+  const cacheUrl = `https://r2-cache/${r2Key}`;
+  const cacheKey = new Request(cacheUrl);
   const cache = caches.default;
 
   const cached = await cache.match(cacheKey);
@@ -176,8 +141,7 @@ export async function fetchStreetShard(
     return cached.json();
   }
 
-  const client = getS3Client(config);
-  const json = await fetchAndDecompress(client, url);
+  const json = await fetchAndDecompress(bucket, r2Key);
   const data: StreetShardData = JSON.parse(json);
 
   const cacheResponse = new Response(json, {
