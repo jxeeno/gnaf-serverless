@@ -213,7 +213,8 @@ export function scoreAddress(
   parsed: ParsedQuery
 ): number {
   if (parsed.numTokens.length === 0) {
-    // No numbers: representative address
+    // No numbers: prefer bare street addresses over unit/level sub-addresses
+    if (entry.f == null && entry.l == null) return 2;
     return 1;
   }
 
