@@ -389,8 +389,8 @@ export default function App() {
         const meta: SearchMeta = {
           d1RowsRead: parseInt(res.headers.get("X-D1-Rows-Read") ?? "0", 10),
           d1Duration: parseFloat(res.headers.get("X-D1-Duration-Ms") ?? "0"),
-          s3Fetches: parseInt(res.headers.get("X-S3-Fetches") ?? "0", 10),
-          s3Duration: parseFloat(res.headers.get("X-S3-Duration-Ms") ?? "0"),
+          s3Fetches: parseInt(res.headers.get("X-R2-Fetches") ?? "0", 10),
+          s3Duration: parseFloat(res.headers.get("X-R2-Duration-Ms") ?? "0"),
         };
 
         // Log the request regardless of staleness
@@ -766,7 +766,7 @@ export default function App() {
                   {searchMeta && (
                     <div className="border-t border-border px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
                       <span>D1: {searchMeta.d1Duration.toFixed(0)}ms / {searchMeta.d1RowsRead.toLocaleString()} rows</span>
-                      <span>S3: {searchMeta.s3Duration.toFixed(0)}ms / {searchMeta.s3Fetches} fetches</span>
+                      <span>R2: {searchMeta.s3Duration.toFixed(0)}ms / {searchMeta.s3Fetches} fetches</span>
                     </div>
                   )}
                 </div>
@@ -944,8 +944,8 @@ export default function App() {
                       <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Total</th>
                       <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">D1</th>
                       <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">D1 Rows</th>
-                      <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">S3</th>
-                      <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">S3 Req</th>
+                      <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">R2</th>
+                      <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">R2 Req</th>
                       <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Streets</th>
                       <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Addrs</th>
                       <th className="text-center px-2 py-1.5 font-medium text-muted-foreground">Status</th>

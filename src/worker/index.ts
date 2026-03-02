@@ -52,6 +52,7 @@ app.use(
       "X-D1-Duration-Ms",
       "X-R2-Fetches",
       "X-R2-Duration-Ms",
+      "X-GNAF-Version",
     ],
   })
 );
@@ -364,6 +365,7 @@ app.get("/api/addresses/search", async (c) => {
     200,
     {
       "Cache-Control": `public, max-age=${CACHE_TTL}`,
+      "X-GNAF-Version": gnafVersion,
       "X-D1-Rows-Read": String(d1RowsRead),
       "X-D1-Duration-Ms": String(d1Duration),
       "X-R2-Fetches": String(s3Fetches),
@@ -404,6 +406,7 @@ app.get("/api/addresses/:pid", async (c) => {
   const body = formatAddressResponse(pid, record);
   const response = c.json(body, 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-GNAF-Version": gnafVersion,
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
@@ -477,6 +480,7 @@ app.get("/api/addresses", async (c) => {
 
   const response = c.json(addresses, 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-GNAF-Version": gnafVersion,
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
@@ -586,6 +590,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
 
   const response = c.json(addresses, 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-GNAF-Version": gnafVersion,
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;

@@ -191,9 +191,9 @@ function IndexPage() {
           d1Duration: parseFloat(
             res.headers.get("X-D1-Duration-Ms") ?? "0"
           ),
-          s3Fetches: parseInt(res.headers.get("X-S3-Fetches") ?? "0", 10),
+          s3Fetches: parseInt(res.headers.get("X-R2-Fetches") ?? "0", 10),
           s3Duration: parseFloat(
-            res.headers.get("X-S3-Duration-Ms") ?? "0"
+            res.headers.get("X-R2-Duration-Ms") ?? "0"
           ),
         };
 
@@ -511,7 +511,7 @@ function IndexPage() {
                       {searchMeta.d1RowsRead.toLocaleString()} rows
                     </span>
                     <span>
-                      S3: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
+                      R2: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
                       {searchMeta.s3Fetches} fetches
                     </span>
                   </div>
@@ -688,10 +688,10 @@ function IndexPage() {
                       D1 Rows
                     </th>
                     <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      S3
+                      R2
                     </th>
                     <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      S3 Req
+                      R2 Req
                     </th>
                     <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
                       Streets
