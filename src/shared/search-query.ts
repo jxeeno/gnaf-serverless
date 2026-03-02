@@ -14,6 +14,8 @@ export interface ParsedQuery {
   streetHint: number | null;
   /** Suffix on the street number hint (e.g., "A" from "2A"), or null */
   streetSuffix: string | null;
+  /** Raw alpha/alphanumeric flat identifier (e.g., "A", "A1", "LG3"), or null */
+  flatDisplayHint: string | null;
   /** FTS5 query string with synonym expansion */
   ftsQuery: string;
 }
@@ -44,9 +46,27 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
 
   // Strip flat/level type keywords from text tokens for FTS5
   const hasUnitKeyword = rawTextTokens.some((t) => FLAT_LEVEL_KEYWORDS.has(t));
-  const textTokens = rawTextTokens.filter(
+  let textTokens = rawTextTokens.filter(
     (t) => !FLAT_LEVEL_KEYWORDS.has(t)
   );
+
+  // Detect alpha/alphanumeric flat identifier.
+  // Triggers when:
+  //   1. A unit keyword is present (e.g., "unit A1 173 monaro"), OR
+  //   2. The query starts with alpha-flat slash/comma notation (e.g., "A1/173", "B, 5")
+  // Strips tokens like "A", "A1", "LG3" from text tokens so they don't leak into FTS.
+  let flatDisplayHint: string | null = null;
+  const hasAlphaFlatNotation = /^\s*[A-Z]{1,3}\d*\s*[\/,]\s*\d/i.test(q);
+  if (hasUnitKeyword || hasAlphaFlatNotation) {
+    // Match: single letter (A, B) or 1-3 alpha prefix + digits (A1, LG3)
+    const flatIdIdx = textTokens.findIndex(
+      (t) => /^[A-Z]$|^[A-Z]{1,3}\d+$/.test(t)
+    );
+    if (flatIdIdx !== -1) {
+      flatDisplayHint = textTokens[flatIdIdx];
+      textTokens = textTokens.filter((_, i) => i !== flatIdIdx);
+    }
+  }
 
   if (textTokens.length === 0) {
     return null;
@@ -67,7 +87,19 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
   let streetHint: number | null = null;
   let streetSuffix: string | null = null;
 
-  if (numTokens.length >= 2) {
+  if (flatDisplayHint != null) {
+    // Alpha flat identifier detected (e.g., "A", "A1", "LG3")
+    // Extract digit part as flatHint (e.g., "A1" → 1, "LG3" → 3, "A" → null)
+    const digitPart = flatDisplayHint.replace(/^[A-Z]+/, "");
+    if (digitPart) {
+      flatHint = parseInt(digitPart, 10);
+    }
+    // Remaining numeric tokens are street numbers
+    if (numTokens.length >= 1) {
+      streetHint = parseNum(numTokens[numTokens.length - 1]);
+      streetSuffix = parseSuffix(numTokens[numTokens.length - 1]);
+    }
+  } else if (numTokens.length >= 2) {
     // Two or more numbers: first is flat, last is street number
     flatHint = parseNum(numTokens[0]);
     streetHint = parseNum(numTokens[numTokens.length - 1]);
@@ -99,6 +131,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
     flatHint,
     streetHint,
     streetSuffix,
+    flatDisplayHint,
     ftsQuery,
   };
 }
@@ -116,13 +149,20 @@ export function scoreAddress(
     return 1;
   }
 
-  const { flatHint, streetHint, streetSuffix, numTokens } = parsed;
+  const { flatHint, streetHint, streetSuffix, flatDisplayHint, numTokens } = parsed;
 
   // Check if the display prefix contains the full numeric token (e.g., "2A" in "2A" or "UNIT 3, 2A")
   function displayStartsWith(token: string): boolean {
     if (!entry.d) return false;
     // Match token at start of display or after ", " separator
     return entry.d === token || entry.d.startsWith(token + ",") || entry.d.includes(", " + token);
+  }
+
+  /** Check if the unit part of the display matches an alpha flat hint */
+  function displayHasFlat(hint: string): boolean {
+    if (!entry.d) return false;
+    const unitPart = entry.d.split(",")[0].trim();
+    return unitPart === hint || unitPart.endsWith(" " + hint);
   }
 
   if (flatHint != null && streetHint != null) {
@@ -142,6 +182,13 @@ export function scoreAddress(
   } else if (streetHint != null) {
     // Street number only
     if (entry.n != null && entry.n === streetHint) {
+      if (flatDisplayHint != null) {
+        // Has alpha flat hint (e.g., "unit A 57") — boost if display matches
+        if (displayHasFlat(flatDisplayHint)) {
+          return 110; // Alpha flat display match + street match
+        }
+        return 90; // Street matches but flat doesn't match
+      }
       if (streetSuffix != null) {
         // Has suffix (e.g., "2A") — boost exact suffix match in display
         const fullNum = `${streetHint}${streetSuffix}`;

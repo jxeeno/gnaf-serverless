@@ -142,6 +142,96 @@ describe("parseSearchQuery", () => {
     });
   });
 
+  describe("alpha flat identifier detection", () => {
+    it("strips single letter flat from text tokens (unit A 57 mackellar)", () => {
+      const r = parseSearchQuery("unit A 57 mackellar")!;
+      expect(r.flatDisplayHint).toBe("A");
+      expect(r.textTokens).not.toContain("A");
+      expect(r.textTokens).toContain("MACKELLAR");
+      expect(r.flatHint).toBeNull(); // pure alpha, no digit part
+      expect(r.streetHint).toBe(57);
+    });
+
+    it("strips alpha+digit flat from text tokens (unit A1 173 monaro)", () => {
+      const r = parseSearchQuery("unit A1 173 monaro")!;
+      expect(r.flatDisplayHint).toBe("A1");
+      expect(r.textTokens).not.toContain("A1");
+      expect(r.flatHint).toBe(1); // digit part extracted
+      expect(r.streetHint).toBe(173);
+    });
+
+    it("strips multi-alpha+digit flat (unit LG3 72 allara)", () => {
+      const r = parseSearchQuery("unit LG3 72 allara")!;
+      expect(r.flatDisplayHint).toBe("LG3");
+      expect(r.textTokens).not.toContain("LG3");
+      expect(r.flatHint).toBe(3);
+      expect(r.streetHint).toBe(72);
+    });
+
+    it("does not detect flat identifier without unit keyword or slash/comma", () => {
+      const r = parseSearchQuery("A 57 mackellar")!;
+      expect(r.flatDisplayHint).toBeNull();
+      // A remains in text tokens (no unit keyword or slash/comma to trigger detection)
+      expect(r.textTokens).toContain("A");
+    });
+
+    it("detects alpha flat in slash notation (A1/173 monaro)", () => {
+      const r = parseSearchQuery("A1/173 monaro")!;
+      expect(r.flatDisplayHint).toBe("A1");
+      expect(r.flatHint).toBe(1);
+      expect(r.streetHint).toBe(173);
+      expect(r.textTokens).toEqual(["MONARO"]);
+      expect(r.ftsQuery).not.toContain("A1");
+    });
+
+    it("detects alpha flat in comma notation (A1, 173 monaro)", () => {
+      const r = parseSearchQuery("A1, 173 monaro")!;
+      expect(r.flatDisplayHint).toBe("A1");
+      expect(r.flatHint).toBe(1);
+      expect(r.streetHint).toBe(173);
+      expect(r.textTokens).toEqual(["MONARO"]);
+    });
+
+    it("detects single letter in slash notation (C/5 murray)", () => {
+      // Note: "B" would be treated as BASEMENT keyword (in FLAT_LEVEL_KEYWORDS)
+      const r = parseSearchQuery("C/5 murray")!;
+      expect(r.flatDisplayHint).toBe("C");
+      expect(r.flatHint).toBeNull();
+      expect(r.streetHint).toBe(5);
+      expect(r.textTokens).toEqual(["MURRAY"]);
+    });
+
+    it("does not trigger on numeric slash notation (3/5 murray)", () => {
+      const r = parseSearchQuery("3/5 murray")!;
+      expect(r.flatDisplayHint).toBeNull();
+      // Normal numeric parsing: flat=3, street=5
+      expect(r.flatHint).toBe(3);
+      expect(r.streetHint).toBe(5);
+    });
+
+    it("does not trigger on mid-query commas (28 murray rd, canberra)", () => {
+      const r = parseSearchQuery("28 murray rd, canberra")!;
+      expect(r.flatDisplayHint).toBeNull();
+    });
+
+    it("does not match multi-letter non-digit tokens (e.g., street names)", () => {
+      const r = parseSearchQuery("unit 3 murray")!;
+      expect(r.flatDisplayHint).toBeNull();
+      expect(r.textTokens).toContain("MURRAY");
+    });
+
+    it("alpha flat excludes token from FTS query", () => {
+      const r = parseSearchQuery("unit A1 173 monaro")!;
+      expect(r.ftsQuery).not.toContain("A1");
+      expect(r.ftsQuery).toContain("MONARO");
+    });
+
+    it("returns null when alpha flat leaves no text tokens", () => {
+      // "unit A" → textTokens after stripping UNIT and A = []
+      expect(parseSearchQuery("unit A")).toBeNull();
+    });
+  });
+
   describe("FTS5 query generation", () => {
     it("generates prefix search on last token", () => {
       const r = parseSearchQuery("murray")!;
@@ -453,15 +543,77 @@ describe("scoreAddress", () => {
     });
   });
 
-  describe("unit: alpha-prefix (e.g., UNIT A1, JAMES COURT BLK A, 173)", () => {
-    // d='UNIT A1, JAMES COURT BLK A, 173'  n=173  f=1
-    // Note: GNAF stores f as integer=1 (strips alpha prefix from flat)
-    const parsed = parseSearchQuery("unit 1 173 monaro")!;
+  describe("unit: alpha-prefix via slash notation (e.g., 'A1/173 monaro')", () => {
+    const parsed = parseSearchQuery("A1/173 monaro")!;
 
     it("flat + street match → 200", () => {
       expect(
         scoreAddress(
           entry({ n: 173, f: 1, d: "UNIT A1, JAMES COURT BLK A, 173" }),
+          parsed
+        )
+      ).toBe(200);
+    });
+
+    it("street match, different flat → 90", () => {
+      expect(
+        scoreAddress(
+          entry({ n: 173, f: 5, d: "UNIT B5, 173" }),
+          parsed
+        )
+      ).toBe(90);
+    });
+  });
+
+  describe("unit: alpha-prefix via comma notation (e.g., 'A1, 173 monaro')", () => {
+    const parsed = parseSearchQuery("A1, 173 monaro")!;
+
+    it("flat + street match → 200", () => {
+      expect(
+        scoreAddress(
+          entry({ n: 173, f: 1, d: "UNIT A1, JAMES COURT BLK A, 173" }),
+          parsed
+        )
+      ).toBe(200);
+    });
+  });
+
+  describe("unit: pure alpha via slash notation (e.g., 'C/5 murray')", () => {
+    // Note: "B" would be treated as BASEMENT keyword, so use "C" instead
+    const parsed = parseSearchQuery("C/5 murray")!;
+
+    it("display flat match + street → 110", () => {
+      expect(
+        scoreAddress(entry({ n: 5, d: "UNIT C, 5" }), parsed)
+      ).toBe(110);
+    });
+
+    it("street match, different flat → 90", () => {
+      expect(
+        scoreAddress(entry({ n: 5, d: "UNIT D, 5" }), parsed)
+      ).toBe(90);
+    });
+  });
+
+  describe("unit: alpha-prefix with alpha query (e.g., 'unit A1 173 monaro')", () => {
+    // d='UNIT A1, JAMES COURT BLK A, 173'  n=173  f=1
+    // Query uses alpha identifier: flatDisplayHint="A1", flatHint=1, streetHint=173
+    const parsed = parseSearchQuery("unit A1 173 monaro")!;
+
+    it("flat + street match → 200", () => {
+      expect(
+        scoreAddress(
+          entry({ n: 173, f: 1, d: "UNIT A1, JAMES COURT BLK A, 173" }),
+          parsed
+        )
+      ).toBe(200);
+    });
+
+    it("same integer flat but different alpha prefix → 200", () => {
+      // B1 also has f=1, so integer matching gives 200
+      expect(
+        scoreAddress(
+          entry({ n: 173, f: 1, d: "UNIT B1, JAMES COURT BLK B, 173" }),
           parsed
         )
       ).toBe(200);
@@ -477,10 +629,24 @@ describe("scoreAddress", () => {
     });
   });
 
-  describe("unit: multi-alpha (e.g., UNIT LG3, THE GRANDE, 72)", () => {
+  describe("unit: alpha-prefix with numeric query (e.g., 'unit 1 173 monaro')", () => {
+    // Same address, but user types just the number
+    const parsed = parseSearchQuery("unit 1 173 monaro")!;
+
+    it("flat + street match → 200", () => {
+      expect(
+        scoreAddress(
+          entry({ n: 173, f: 1, d: "UNIT A1, JAMES COURT BLK A, 173" }),
+          parsed
+        )
+      ).toBe(200);
+    });
+  });
+
+  describe("unit: multi-alpha with alpha query (e.g., 'unit LG3 72 allara')", () => {
     // d='UNIT LG3, THE GRANDE, 72'  n=72  f=3
-    // Note: GNAF stores f as integer=3 (strips "LG" prefix)
-    const parsed = parseSearchQuery("unit 3 72 allara")!;
+    // Query: flatDisplayHint="LG3", flatHint=3, streetHint=72
+    const parsed = parseSearchQuery("unit LG3 72 allara")!;
 
     it("flat + street match → 200", () => {
       expect(
@@ -501,22 +667,57 @@ describe("scoreAddress", () => {
     });
   });
 
-  describe("unit: pure alpha (e.g., UNIT A, 57 MACKELLAR CR)", () => {
+  describe("unit: multi-alpha with numeric query (e.g., 'unit 3 72 allara')", () => {
+    const parsed = parseSearchQuery("unit 3 72 allara")!;
+
+    it("flat + street match → 200", () => {
+      expect(
+        scoreAddress(
+          entry({ n: 72, f: 3, d: "UNIT LG3, THE GRANDE, 72" }),
+          parsed
+        )
+      ).toBe(200);
+    });
+  });
+
+  describe("unit: pure alpha with alpha query (e.g., 'unit A 57 mackellar')", () => {
     // d='UNIT A, 57'  n=57  f=None — pure alpha unit has no integer flat number
+    // Query: flatDisplayHint="A", flatHint=null, streetHint=57
+    const parsed = parseSearchQuery("unit A 57 mackellar")!;
+
+    it("display flat match + street match → 110", () => {
+      expect(
+        scoreAddress(entry({ n: 57, d: "UNIT A, 57" }), parsed)
+      ).toBe(110);
+    });
+
+    it("street match, different flat in display → 90", () => {
+      expect(
+        scoreAddress(entry({ n: 57, d: "UNIT B, 57" }), parsed)
+      ).toBe(90);
+    });
+
+    it("street match, no flat in display → 90", () => {
+      expect(
+        scoreAddress(entry({ n: 57, d: "57" }), parsed)
+      ).toBe(90);
+    });
+
+    it("no match → 0", () => {
+      expect(
+        scoreAddress(entry({ n: 99, d: "99" }), parsed)
+      ).toBe(0);
+    });
+  });
+
+  describe("unit: pure alpha without keyword (e.g., '57 mackellar')", () => {
+    // Without unit keyword, no alpha detection — standard street search
     const parsed = parseSearchQuery("57 mackellar")!;
 
-    it("street match, no flat on entry → 100", () => {
+    it("street match → 100", () => {
       expect(
         scoreAddress(entry({ n: 57, d: "UNIT A, 57" }), parsed)
       ).toBe(100);
-    });
-
-    it("partial display match when searching for non-matching number → 30", () => {
-      // searching "5 mackellar" — n=57 doesn't match but "5" is in display "UNIT A, 57"
-      const parsed5 = parseSearchQuery("5 mackellar")!;
-      expect(
-        scoreAddress(entry({ n: 57, d: "UNIT A, 57" }), parsed5)
-      ).toBe(30);
     });
   });
 
