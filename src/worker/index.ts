@@ -191,7 +191,9 @@ app.get("/api/addresses/search", async (c) => {
          WHERE s.street_name LIKE ?1 || '%'
            AND (?2 IS NULL OR (s.num_min IS NOT NULL AND s.num_max IS NOT NULL AND ?2 BETWEEN s.num_min AND s.num_max))
            AND (?3 IS NULL OR (s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL AND ?3 BETWEEN s.flat_min AND s.flat_max))
-         ORDER BY (${rankingExpr}) DESC
+         -- No ORDER BY here: this direct-query path is used for single-char street names
+         -- (e.g., "20 W") where FTS5 is too expensive. Adding ORDER BY would force a full
+         -- table scan defeating the purpose. The FTS path below handles ranking instead.
          LIMIT ?5`
       )
       .bind(firstTextToken, capTo3(streetHint), capTo3(flatHint ?? levelHint), firstTextToken, streetLimit)
