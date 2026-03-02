@@ -197,7 +197,11 @@ export function scoreAddress(
         }
         return 90; // Number matches but suffix differs (e.g., "2B" vs "2A")
       }
-      return 100; // Exact street number match
+      // No unit context: prefer bare street address over unit addresses
+      if (entry.f != null) {
+        return 90; // Entry has a flat — user didn't ask for one
+      }
+      return 100; // Bare street address
     }
     if (entry.f != null && entry.f === streetHint) {
       return 80; // Matched as flat number

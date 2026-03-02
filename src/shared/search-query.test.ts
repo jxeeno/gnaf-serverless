@@ -313,8 +313,14 @@ describe("scoreAddress", () => {
   describe("single street number (e.g., '5 murray')", () => {
     const parsed = parseSearchQuery("5 murray")!;
 
-    it("exact street number match → 100", () => {
+    it("bare street address → 100", () => {
       expect(scoreAddress(entry({ n: 5, d: "5" }), parsed)).toBe(100);
+    });
+
+    it("street match but entry has flat → 90 (user didn't ask for unit)", () => {
+      expect(
+        scoreAddress(entry({ f: 1, n: 5, d: "UNIT 1, 5" }), parsed)
+      ).toBe(90);
     });
 
     it("flat number match → 80", () => {
