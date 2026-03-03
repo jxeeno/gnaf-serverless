@@ -588,7 +588,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
   );
 
   // Collect addresses
-  const addresses: { p: string; s: string }[] = [];
+  const addresses: { p: string; s: string; n?: number; l?: number; f?: number }[] = [];
   for (const { shardPrefix, shardKey } of keysToFetch) {
     const shardData = shardByPrefix.get(shardPrefix);
     const entries = shardData?.[shardKey];
@@ -597,15 +597,25 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
       addresses.push({
         p: entry.p,
         s: entryToSla(entry, street as unknown as StreetRow),
+        n: entry.n,
+        l: entry.l,
+        f: entry.f,
       });
     }
   }
+
+  // Sort by street number, level, flat (ascending, nulls first)
+  addresses.sort((a, b) =>
+    (a.n ?? -1) - (b.n ?? -1) ||
+    (a.l ?? -1) - (b.l ?? -1) ||
+    (a.f ?? -1) - (b.f ?? -1)
+  );
 
   if (addresses.length === 0) {
     return c.json({ error: "No addresses found for street", streetId }, 404);
   }
 
-  const response = c.json(addresses, 200, {
+  const response = c.json(addresses.map(({ p, s }) => ({ p, s })), 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
     "X-GNAF-Version": gnafVersion,
   });
