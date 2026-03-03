@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PlacePlaceIdRouteImport } from './routes/place.$placeId'
 import { Route as LotdpLotdpIdRouteImport } from './routes/lotdp.$lotdpId'
 import { Route as AddressGnafIdRouteImport } from './routes/address.$gnafId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlacePlaceIdRoute = PlacePlaceIdRouteImport.update({
+  id: '/place/$placeId',
+  path: '/place/$placeId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LotdpLotdpIdRoute = LotdpLotdpIdRouteImport.update({
@@ -33,30 +39,39 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/address/$gnafId': typeof AddressGnafIdRoute
   '/lotdp/$lotdpId': typeof LotdpLotdpIdRoute
+  '/place/$placeId': typeof PlacePlaceIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/address/$gnafId': typeof AddressGnafIdRoute
   '/lotdp/$lotdpId': typeof LotdpLotdpIdRoute
+  '/place/$placeId': typeof PlacePlaceIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/address/$gnafId': typeof AddressGnafIdRoute
   '/lotdp/$lotdpId': typeof LotdpLotdpIdRoute
+  '/place/$placeId': typeof PlacePlaceIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/address/$gnafId' | '/lotdp/$lotdpId'
+  fullPaths: '/' | '/address/$gnafId' | '/lotdp/$lotdpId' | '/place/$placeId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/address/$gnafId' | '/lotdp/$lotdpId'
-  id: '__root__' | '/' | '/address/$gnafId' | '/lotdp/$lotdpId'
+  to: '/' | '/address/$gnafId' | '/lotdp/$lotdpId' | '/place/$placeId'
+  id:
+    | '__root__'
+    | '/'
+    | '/address/$gnafId'
+    | '/lotdp/$lotdpId'
+    | '/place/$placeId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AddressGnafIdRoute: typeof AddressGnafIdRoute
   LotdpLotdpIdRoute: typeof LotdpLotdpIdRoute
+  PlacePlaceIdRoute: typeof PlacePlaceIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -66,6 +81,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/place/$placeId': {
+      id: '/place/$placeId'
+      path: '/place/$placeId'
+      fullPath: '/place/$placeId'
+      preLoaderRoute: typeof PlacePlaceIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/lotdp/$lotdpId': {
@@ -89,6 +111,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AddressGnafIdRoute: AddressGnafIdRoute,
   LotdpLotdpIdRoute: LotdpLotdpIdRoute,
+  PlacePlaceIdRoute: PlacePlaceIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

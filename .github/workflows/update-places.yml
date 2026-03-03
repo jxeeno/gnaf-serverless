@@ -1,0 +1,90 @@
+name: Update Places Data
+
+on:
+  schedule:
+    # Overture releases roughly quarterly — run on the 1st of Jan, Apr, Jul, Oct
+    # Offset from GNAF schedule to spread load
+    - cron: '0 0 1 1,4,7,10 *'
+  workflow_dispatch:
+    inputs:
+      shard_prefix_length:
+        description: 'Shard prefix length (hex chars)'
+        required: false
+        default: '3'
+      overture_release:
+        description: 'Overture Maps release version (e.g. 2025-03-19.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: '--max-old-space-size=4096'
+  SHARD_PREFIX_LENGTH: ${{ github.event.inputs.shard_prefix_length || '3' }}
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Overture Places
+        run: npm run places:download
+        env:
+          OVERTURE_RELEASE: ${{ github.event.inputs.overture_release || '' }}
+
+      - name: Import and denormalize
+        run: npm run places:import
+
+      - name: Shard place records
+        run: npm run places:shard
+
+      - name: Generate search index
+        run: npm run places:search-index
+
+      - name: Read metadata
+        id: meta
+        run: |
+          VERSION=$(jq -r .version data/shards/places/metadata.json)
+          DATE=$(jq -r .date data/shards/places/metadata.json)
+          TOTAL=$(jq -r .totalPlaces data/shards/places/metadata.json)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to R2
+        run: npm run places:upload
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+
+      - name: Upload search index to D1
+        run: |
+          for f in data/shards/places/search-index/*.sql; do
+            echo "Executing $f..."
+            npx wrangler d1 execute places-search --remote --file="$f"
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Summary
+        run: |
+          echo "### Places Data Updated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total places**: ${{ steps.meta.outputs.total }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Built**: ${{ steps.meta.outputs.date }}" >> $GITHUB_STEP_SUMMARY

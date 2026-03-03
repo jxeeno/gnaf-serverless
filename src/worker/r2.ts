@@ -1,4 +1,4 @@
-import type { AddressShardData, LotDpShardData, StreetShardData } from "../shared/types.js";
+import type { AddressShardData, LotDpShardData, PlaceShardData, StreetShardData } from "../shared/types.js";
 
 async function fetchAndDecompress(
   bucket: R2Bucket,
@@ -143,6 +143,76 @@ export async function fetchStreetShard(
 
   const json = await fetchAndDecompress(bucket, r2Key);
   const data: StreetShardData = JSON.parse(json);
+
+  const cacheResponse = new Response(json, {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=86400",
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+
+  return data;
+}
+
+/**
+ * Fetch the latest places version string from places/latest.json in R2.
+ * Cached for 1 hour.
+ */
+export async function fetchPlacesLatestVersion(
+  bucket: R2Bucket,
+  ctx: ExecutionContext
+): Promise<string> {
+  const cacheUrl = "https://r2-cache/places/latest.json";
+  const cacheKey = new Request(cacheUrl);
+  const cache = caches.default;
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    const data = await cached.json<{ version: string }>();
+    return data.version;
+  }
+
+  const obj = await bucket.get("places/latest.json");
+  if (!obj) {
+    throw new Error("Failed to fetch places/latest.json from R2");
+  }
+
+  const json = await obj.text();
+  const data = JSON.parse(json) as { version: string };
+
+  const cacheResponse = new Response(json, {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=3600",
+    },
+  });
+  ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+
+  return data.version;
+}
+
+/**
+ * Fetch a place shard from R2, with Cloudflare Cache API caching.
+ */
+export async function fetchPlaceShard(
+  bucket: R2Bucket,
+  version: string,
+  prefix: string,
+  ctx: ExecutionContext
+): Promise<PlaceShardData> {
+  const r2Key = `places/${version}/records/${prefix}.json.gz`;
+  const cacheUrl = `https://r2-cache/${r2Key}`;
+  const cacheKey = new Request(cacheUrl);
+  const cache = caches.default;
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return cached.json();
+  }
+
+  const json = await fetchAndDecompress(bucket, r2Key);
+  const data: PlaceShardData = JSON.parse(json);
 
   const cacheResponse = new Response(json, {
     headers: {

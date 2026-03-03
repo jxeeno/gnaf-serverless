@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { Search, MapPin, Hash, ChevronDown, Loader2, Building2, X } from "lucide-react";
+import { Search, MapPin, Hash, ChevronDown, Loader2, Building2, X, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,6 +35,15 @@ interface SearchMeta {
   d1Duration: number;
   s3Fetches: number;
   s3Duration: number;
+}
+
+interface PlaceSearchResult {
+  id: string;
+  name: string;
+  category: string | null;
+  display: string;
+  latitude: number;
+  longitude: number;
 }
 
 interface RequestLogEntry {
@@ -102,7 +111,7 @@ function HighlightMatch({ text, query }: { text: string; query: string }) {
 
 function IndexPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"search" | "gnaf" | "lpid">("search");
+  const [mode, setMode] = useState<"search" | "places" | "gnaf" | "lpid">("search");
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAddresses, setSearchAddresses] = useState<SearchAddressResult[]>([]);
@@ -116,6 +125,7 @@ function IndexPage() {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [requestLog, setRequestLog] = useState<RequestLogEntry[]>([]);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [placeResults, setPlaceResults] = useState<PlaceSearchResult[]>([]);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -127,17 +137,24 @@ function IndexPage() {
   const dropdownItems: Array<
     | { type: "address"; data: SearchAddressResult }
     | { type: "street"; data: SearchResult }
+    | { type: "place"; data: PlaceSearchResult }
   > = [];
-  for (const addr of searchAddresses) {
-    dropdownItems.push({ type: "address", data: addr });
-  }
-  for (const street of searchResults) {
-    dropdownItems.push({ type: "street", data: street });
+  if (mode === "places") {
+    for (const place of placeResults) {
+      dropdownItems.push({ type: "place", data: place });
+    }
+  } else {
+    for (const addr of searchAddresses) {
+      dropdownItems.push({ type: "address", data: addr });
+    }
+    for (const street of searchResults) {
+      dropdownItems.push({ type: "street", data: street });
+    }
   }
 
   const hasDropdownContent = dropdownItems.length > 0;
   const showDropdown =
-    mode === "search" && dropdownOpen && hasDropdownContent && !selectedStreet;
+    (mode === "search" || mode === "places") && dropdownOpen && hasDropdownContent && !selectedStreet;
 
   // Debounced search with AbortController for stale request cancellation
   useEffect(() => {
@@ -243,6 +260,94 @@ function IndexPage() {
     };
   }, [query, mode]);
 
+  // Debounced places search
+  useEffect(() => {
+    if (mode !== "places") return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    const q = query.trim();
+    if (q.length < 2) {
+      setPlaceResults([]);
+      setActiveIndex(-1);
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+
+    debounceRef.current = setTimeout(async () => {
+      if (abortRef.current) abortRef.current.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setSearchLoading(true);
+      setError(null);
+      const fetchStart = performance.now();
+      try {
+        const res = await fetch(
+          `/api/places/search?q=${encodeURIComponent(q)}&limit=10`,
+          { signal: controller.signal }
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `HTTP ${res.status}`);
+        }
+
+        const totalMs = performance.now() - fetchStart;
+        const isStale = requestId !== requestIdRef.current;
+
+        const data: { places: PlaceSearchResult[] } = await res.json();
+
+        const meta: SearchMeta = {
+          d1RowsRead: parseInt(res.headers.get("X-D1-Rows-Read") ?? "0", 10),
+          d1Duration: parseFloat(res.headers.get("X-D1-Duration-Ms") ?? "0"),
+          s3Fetches: 0,
+          s3Duration: 0,
+        };
+
+        setRequestLog((prev) =>
+          [
+            {
+              id: requestId,
+              query: q,
+              timestamp: Date.now(),
+              totalMs,
+              d1RowsRead: meta.d1RowsRead,
+              d1Duration: meta.d1Duration,
+              s3Fetches: 0,
+              s3Duration: 0,
+              streets: 0,
+              addresses: data.places.length,
+              stale: isStale,
+            },
+            ...prev,
+          ].slice(0, 50)
+        );
+
+        if (isStale) return;
+
+        setPlaceResults(data.places);
+        setSearchMeta(meta);
+        setDropdownOpen(true);
+        setActiveIndex(-1);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        if (requestId !== requestIdRef.current) return;
+        setError(err instanceof Error ? err.message : "Unknown error");
+        setPlaceResults([]);
+        setSearchMeta(null);
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setSearchLoading(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, mode]);
+
   // Close dropdown on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -279,6 +384,11 @@ function IndexPage() {
           navigate({
             to: "/address/$gnafId",
             params: { gnafId: (item.data as SearchAddressResult).pid },
+          });
+        } else if (item.type === "place") {
+          navigate({
+            to: "/place/$placeId",
+            params: { placeId: (item.data as PlaceSearchResult).id },
           });
         } else {
           handleStreetSelect(item.data as SearchResult);
@@ -322,11 +432,12 @@ function IndexPage() {
     }
   }, []);
 
-  const handleModeChange = (newMode: "search" | "gnaf" | "lpid") => {
+  const handleModeChange = (newMode: "search" | "places" | "gnaf" | "lpid") => {
     setMode(newMode);
     setQuery("");
     setSearchResults([]);
     setSearchAddresses([]);
+    setPlaceResults([]);
     setSearchMeta(null);
     setSelectedStreet(null);
     setStreetAddresses([]);
@@ -339,6 +450,7 @@ function IndexPage() {
     setQuery("");
     setSearchResults([]);
     setSearchAddresses([]);
+    setPlaceResults([]);
     setSearchMeta(null);
     setSelectedStreet(null);
     setStreetAddresses([]);
@@ -374,6 +486,15 @@ function IndexPage() {
             Search
           </Button>
           <Button
+            variant={mode === "places" ? "default" : "outline"}
+            size="sm"
+            onClick={() => handleModeChange("places")}
+            className="gap-1.5"
+          >
+            <Store className="h-3.5 w-3.5" />
+            Places
+          </Button>
+          <Button
             variant={mode === "gnaf" ? "default" : "outline"}
             size="sm"
             onClick={() => handleModeChange("gnaf")}
@@ -393,13 +514,13 @@ function IndexPage() {
           </Button>
         </div>
 
-        {mode === "search" ? (
+        {mode === "search" || mode === "places" ? (
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
             <input
               ref={inputRef}
               type="text"
-              placeholder="Search for an address, e.g. 1 Macquarie St Sydney"
+              placeholder={mode === "places" ? "Search for a place, e.g. Woolworths Sydney" : "Search for an address, e.g. 1 Macquarie St Sydney"}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -433,75 +554,113 @@ function IndexPage() {
                 ref={dropdownRef}
                 className="absolute z-50 left-0 right-0 top-full mt-1 max-h-[420px] overflow-auto rounded-lg border border-border bg-popover shadow-lg"
               >
-                {searchAddresses.length > 0 && (
-                  <div className="px-3 py-2">
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                      Addresses
-                    </p>
-                  </div>
-                )}
-                {searchAddresses.map((addr, i) => {
-                  const idx = i;
-                  return (
-                    <Link
-                      key={addr.pid}
-                      to="/address/$gnafId"
-                      params={{ gnafId: addr.pid }}
-                      data-index={idx}
-                      className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors cursor-pointer no-underline ${
-                        idx === activeIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/50"
-                      }`}
-                      onMouseEnter={() => setActiveIndex(idx)}
-                    >
-                      <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-sm truncate">
-                        <HighlightMatch text={addr.sla} query={query} />
-                      </span>
-                    </Link>
-                  );
-                })}
-
-                {searchResults.length > 0 && (
-                  <div
-                    className={`px-3 py-2 ${searchAddresses.length > 0 ? "border-t border-border" : ""}`}
-                  >
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                      Streets
-                    </p>
-                  </div>
-                )}
-                {searchResults.map((result, i) => {
-                  const idx = searchAddresses.length + i;
-                  return (
-                    <button
-                      key={result.streetId}
-                      type="button"
-                      data-index={idx}
-                      className={`w-full text-left px-3 py-2.5 flex items-center justify-between gap-2 transition-colors cursor-pointer ${
-                        idx === activeIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/50"
-                      }`}
-                      onMouseEnter={() => setActiveIndex(idx)}
-                      onClick={() => handleStreetSelect(result)}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-sm truncate">
-                          <HighlightMatch
-                            text={result.display}
-                            query={query}
-                          />
-                        </span>
+                {mode === "places" ? (
+                  <>
+                    {placeResults.length > 0 && (
+                      <div className="px-3 py-2">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                          Places
+                        </p>
                       </div>
-                      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-                        {result.addressCount}
-                      </span>
-                    </button>
-                  );
-                })}
+                    )}
+                    {placeResults.map((place, i) => (
+                      <Link
+                        key={place.id}
+                        to="/place/$placeId"
+                        params={{ placeId: place.id }}
+                        data-index={i}
+                        className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors cursor-pointer no-underline ${
+                          i === activeIndex
+                            ? "bg-accent text-accent-foreground"
+                            : "hover:bg-accent/50"
+                        }`}
+                        onMouseEnter={() => setActiveIndex(i)}
+                      >
+                        <Store className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <span className="text-sm truncate block">
+                            <HighlightMatch text={place.name} query={query} />
+                          </span>
+                          <span className="text-xs text-muted-foreground truncate block">
+                            {[place.category, place.display.split(", ").slice(1).join(", ")].filter(Boolean).join(" \u00b7 ")}
+                          </span>
+                        </div>
+                      </Link>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    {searchAddresses.length > 0 && (
+                      <div className="px-3 py-2">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                          Addresses
+                        </p>
+                      </div>
+                    )}
+                    {searchAddresses.map((addr, i) => {
+                      const idx = i;
+                      return (
+                        <Link
+                          key={addr.pid}
+                          to="/address/$gnafId"
+                          params={{ gnafId: addr.pid }}
+                          data-index={idx}
+                          className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors cursor-pointer no-underline ${
+                            idx === activeIndex
+                              ? "bg-accent text-accent-foreground"
+                              : "hover:bg-accent/50"
+                          }`}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                        >
+                          <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                          <span className="text-sm truncate">
+                            <HighlightMatch text={addr.sla} query={query} />
+                          </span>
+                        </Link>
+                      );
+                    })}
+
+                    {searchResults.length > 0 && (
+                      <div
+                        className={`px-3 py-2 ${searchAddresses.length > 0 ? "border-t border-border" : ""}`}
+                      >
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
+                          Streets
+                        </p>
+                      </div>
+                    )}
+                    {searchResults.map((result, i) => {
+                      const idx = searchAddresses.length + i;
+                      return (
+                        <button
+                          key={result.streetId}
+                          type="button"
+                          data-index={idx}
+                          className={`w-full text-left px-3 py-2.5 flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                            idx === activeIndex
+                              ? "bg-accent text-accent-foreground"
+                              : "hover:bg-accent/50"
+                          }`}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                          onClick={() => handleStreetSelect(result)}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            <span className="text-sm truncate">
+                              <HighlightMatch
+                                text={result.display}
+                                query={query}
+                              />
+                            </span>
+                          </div>
+                          <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
+                            {result.addressCount}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
 
                 {/* Performance footer */}
                 {searchMeta && (
@@ -510,10 +669,12 @@ function IndexPage() {
                       D1: {searchMeta.d1Duration.toFixed(0)}ms /{" "}
                       {searchMeta.d1RowsRead.toLocaleString()} rows
                     </span>
-                    <span>
-                      R2: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
-                      {searchMeta.s3Fetches} fetches
-                    </span>
+                    {mode === "search" && (
+                      <span>
+                        R2: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
+                        {searchMeta.s3Fetches} fetches
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -642,13 +803,19 @@ function IndexPage() {
       {/* Empty state */}
       {!selectedStreet && !hasDropdownContent && !error && !searchLoading && (
         <div className="text-center py-12 text-muted-foreground">
-          <MapPin className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          {mode === "places" ? (
+            <Store className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          ) : (
+            <MapPin className="h-10 w-10 mx-auto mb-3 opacity-30" />
+          )}
           <p className="text-sm">
             {mode === "search"
               ? "Start typing to search for an Australian street address"
-              : mode === "gnaf"
-                ? "Enter a GNAF PID to look up an address"
-                : "Enter a legal parcel ID (LPID) to look up addresses"}
+              : mode === "places"
+                ? "Start typing to search for a place or business"
+                : mode === "gnaf"
+                  ? "Enter a GNAF PID to look up an address"
+                  : "Enter a legal parcel ID (LPID) to look up addresses"}
           </p>
         </div>
       )}

@@ -5,11 +5,14 @@ import {
   formatAddressResponse,
   reconstructSla,
 } from "../shared/address-format.js";
+import { formatPlaceResponse } from "../shared/place-format.js";
 import { parseSearchQuery, scoreAddress } from "../shared/search-query.js";
 import type { StreetAddressEntry } from "../shared/types.js";
 import {
   fetchAddressShard,
   fetchLotDpShard,
+  fetchPlaceShard,
+  fetchPlacesLatestVersion,
   fetchStreetShard,
   fetchLatestVersion,
 } from "./r2.js";
@@ -17,8 +20,10 @@ import {
 type Bindings = {
   GNAF_BUCKET: R2Bucket;
   GNAF_VERSION?: string;
+  PLACES_VERSION?: string;
   SHARD_PREFIX_LENGTH: string;
   SEARCH_DB: D1Database;
+  PLACES_DB: D1Database;
 };
 
 interface StreetRow {
@@ -53,6 +58,7 @@ app.use(
       "X-R2-Fetches",
       "X-R2-Duration-Ms",
       "X-GNAF-Version",
+      "X-Places-Version",
     ],
   })
 );
@@ -71,6 +77,15 @@ async function resolveGnafVersion(
   ctx: ExecutionContext
 ): Promise<string> {
   return env.GNAF_VERSION || (await fetchLatestVersion(env.GNAF_BUCKET, ctx));
+}
+
+async function resolvePlacesVersion(
+  env: Bindings,
+  ctx: ExecutionContext
+): Promise<string> {
+  return (
+    env.PLACES_VERSION || (await fetchPlacesLatestVersion(env.GNAF_BUCKET, ctx))
+  );
 }
 
 function getShardPrefixLength(env: Bindings): number {
@@ -618,6 +633,155 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
   const response = c.json(addresses.map(({ p, s }) => ({ p, s })), 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
     "X-GNAF-Version": gnafVersion,
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+});
+
+// ─── Places API ─────────────────────────────────────────────────────
+
+interface PlaceRow {
+  id: number;
+  overture_id: string;
+  display: string;
+  name: string;
+  category: string | null;
+  locality: string | null;
+  state: string | null;
+  postcode: string | null;
+  latitude: number;
+  longitude: number;
+  shard_prefix: string;
+  confidence: number;
+}
+
+// Search places by query string (autocomplete)
+app.get("/api/places/search", async (c) => {
+  const q = c.req.query("q")?.trim();
+  if (!q || q.length < 2) {
+    return c.json({ error: "Query must be at least 2 characters" }, 400);
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const limit = Math.min(parseInt(c.req.query("limit") ?? "10", 10), 50);
+  const lat = c.req.query("lat") ? parseFloat(c.req.query("lat")!) : null;
+  const lng = c.req.query("lng") ? parseFloat(c.req.query("lng")!) : null;
+
+  // Build FTS5 query: split into tokens, apply prefix matching to last token
+  const tokens = q
+    .toUpperCase()
+    .replace(/['']/g, "")
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+
+  if (tokens.length === 0) {
+    return c.json({ places: [] }, 200, {
+      "Cache-Control": "public, max-age=604800",
+    });
+  }
+
+  // All tokens except last are exact, last gets prefix matching
+  const ftsTokens = tokens.map((t, i) =>
+    i === tokens.length - 1 ? `"${t}"*` : `"${t}"`
+  );
+  const ftsQuery = ftsTokens.join(" ");
+
+  const db = c.env.PLACES_DB.withSession();
+
+  // FTS5 search with ranking that combines:
+  // 1. FTS5 rank (text relevance)
+  // 2. Exact name match bonus
+  // 3. Coordinate proximity bias (when lat/lng provided)
+  // 4. Confidence score bonus
+  const searchResults = await db
+    .prepare(
+      `SELECT p.id, p.overture_id, p.display, p.name, p.category,
+              p.locality, p.state, p.postcode,
+              p.latitude, p.longitude, p.shard_prefix, p.confidence
+       FROM places_fts AS fts
+       JOIN places AS p ON p.id = fts.rowid
+       WHERE places_fts MATCH ?1
+       ORDER BY rank - (
+         CASE WHEN UPPER(p.name) = ?4 THEN 100
+              WHEN UPPER(p.name) LIKE ?4 || '%' THEN 30
+         ELSE 0 END
+         + p.confidence * 10
+         + CASE WHEN ?2 IS NOT NULL AND ?3 IS NOT NULL THEN
+             -1.0 * ((p.latitude - ?2) * (p.latitude - ?2)
+                    + (p.longitude - ?3) * (p.longitude - ?3))
+           ELSE 0 END
+       )
+       LIMIT ?5`
+    )
+    .bind(ftsQuery, lat, lng, tokens.join(" "), limit)
+    .all<PlaceRow>();
+
+  if (!searchResults.results.length) {
+    return c.json({ places: [] }, 200, {
+      "Cache-Control": "public, max-age=604800",
+    });
+  }
+
+  const placesVersion = await resolvePlacesVersion(c.env, c.executionCtx);
+
+  const places = searchResults.results.map((r) => ({
+    id: r.overture_id,
+    name: r.name,
+    category: r.category,
+    display: r.display,
+    latitude: r.latitude,
+    longitude: r.longitude,
+  }));
+
+  const d1RowsRead = searchResults.meta?.rows_read ?? 0;
+  const d1Duration = searchResults.meta?.duration ?? 0;
+
+  const response = c.json(
+    { places },
+    200,
+    {
+      "Cache-Control": `public, max-age=${CACHE_TTL}`,
+      "X-Places-Version": placesVersion,
+      "X-D1-Rows-Read": String(d1RowsRead),
+      "X-D1-Duration-Ms": String(d1Duration),
+    }
+  );
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+});
+
+// Get place by Overture ID
+app.get("/api/places/:placeId", async (c) => {
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const placeId = c.req.param("placeId");
+  const placesVersion = await resolvePlacesVersion(c.env, c.executionCtx);
+  const prefixLen = getShardPrefixLength(c.env);
+  const shardPrefix = md5hex(placeId).substring(0, prefixLen);
+
+  const shardData = await fetchPlaceShard(
+    c.env.GNAF_BUCKET,
+    placesVersion,
+    shardPrefix,
+    c.executionCtx
+  );
+  const record = shardData[placeId];
+
+  if (!record) {
+    return c.json({ error: "Place not found", placeId }, 404);
+  }
+
+  const body = formatPlaceResponse(placeId, record);
+  const response = c.json(body, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-Places-Version": placesVersion,
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;

@@ -36,6 +36,11 @@
 			"binding": "SEARCH_DB",
 			"database_name": "gnaf-search",
 			"database_id": "b3061346-8fd8-4fc2-bbaa-1f3af23d4759"
+		},
+		{
+			"binding": "PLACES_DB",
+			"database_name": "places-search",
+			"database_id": "5b40c76c-f761-4427-bf9c-e9feccec9110"
 		}
 	],
 	"r2_buckets": [

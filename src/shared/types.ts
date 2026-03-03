@@ -131,6 +131,53 @@ export interface ShardMetadata {
   datum: string;
 }
 
+/**
+ * Compact place record stored in R2 shards.
+ * Short keys to minimize storage size. Null/undefined fields are omitted.
+ */
+export interface PlaceShardRecord {
+  /** primary name */
+  nm: string;
+  /** primary category (e.g. "restaurant") */
+  cat: string;
+  /** alternate categories */
+  cats?: string[];
+  /** latitude */
+  lat: number;
+  /** longitude */
+  lng: number;
+  /** confidence (0-1) */
+  con: number;
+  /** freeform address */
+  addr?: string;
+  /** locality */
+  loc?: string;
+  /** region/state */
+  reg?: string;
+  /** postcode */
+  pc?: string;
+  /** country code */
+  ctr?: string;
+  /** phone */
+  ph?: string;
+  /** website */
+  web?: string;
+  /** brand name */
+  br?: string;
+}
+
+/** A place shard file: map of Overture place ID → PlaceShardRecord */
+export type PlaceShardData = Record<string, PlaceShardRecord>;
+
+/** Metadata written alongside place shard files */
+export interface PlaceShardMetadata {
+  version: string;
+  date: string;
+  shardPrefixLength: number;
+  totalPlaces: number;
+  totalShards: number;
+}
+
 /** Full addressr-compatible API response */
 export interface AddressResponse {
   pid: string;

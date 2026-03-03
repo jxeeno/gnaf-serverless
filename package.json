@@ -58,6 +58,12 @@
 		"pipeline:upload": "tsx scripts/pipeline/upload.ts",
 		"pipeline:search-index": "tsx scripts/pipeline/search-index.ts",
 		"pipeline:run": "tsx scripts/pipeline/run.ts",
+		"places:download": "tsx scripts/pipeline/places-download.ts",
+		"places:import": "tsx scripts/pipeline/places-import.ts",
+		"places:shard": "tsx scripts/pipeline/places-shard.ts",
+		"places:search-index": "tsx scripts/pipeline/places-search-index.ts",
+		"places:upload": "tsx scripts/pipeline/places-upload.ts",
+		"places:run": "tsx scripts/pipeline/places-run.ts",
 		"test": "vitest run --config vitest.config.ts",
 		"test:watch": "vitest --config vitest.config.ts"
 	},
