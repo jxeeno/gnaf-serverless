@@ -189,25 +189,18 @@ async function querySingleLayer(
   const pmtiles = new PMTiles(source, cache, decompress);
 
   const header = await pmtiles.getHeader();
-  console.log("PMTiles querySingleLayer:", config.name, "tileType:", header.tileType, "tileCompression:", header.tileCompression, "minZoom:", header.minZoom, "maxZoom:", header.maxZoom);
   const { x, y, z } = latLngToTile(lat, lng, config.zoom);
-  console.log("PMTiles tile coords: z=", z, "x=", x, "y=", y);
 
   const tileResponse = await pmtiles.getZxy(z, x, y);
-  if (!tileResponse) { console.log("PMTiles: no tile found at", z, x, y); return null; }
-  console.log("PMTiles: tile data size:", tileResponse.data.byteLength);
+  if (!tileResponse) return null;
 
   const tileData = await decompressTile(tileResponse.data, header.tileCompression);
-  console.log("PMTiles: decompressed size:", tileData.byteLength);
   const tile = new VectorTile(new Protobuf(tileData));
 
-  console.log("PMTiles: available layers:", Object.keys(tile.layers));
   const layer = tile.layers[config.layer];
-  if (!layer) { console.log("PMTiles: layer not found:", config.layer); return null; }
+  if (!layer) return null;
 
-  console.log("PMTiles: layer", config.layer, "has", layer.length, "features, extent:", layer.extent);
   const { px, py } = latLngToTilePixel(lat, lng, z, x, y, layer.extent);
-  console.log("PMTiles: point in tile coords: px=", px, "py=", py);
 
   for (let i = 0; i < layer.length; i++) {
     const feature = layer.feature(i);
@@ -216,9 +209,6 @@ async function querySingleLayer(
     if (feature.type !== 3) continue;
 
     const geometry = feature.loadGeometry();
-    if (i < 3) {
-      console.log("PMTiles: feature", i, "type:", feature.type, "rings:", geometry.length, "props:", JSON.stringify(feature.properties));
-    }
     if (pointInPolygon(px, py, geometry)) {
       // Filter properties if configured
       let props: Record<string, string | number | boolean>;
@@ -264,11 +254,7 @@ export async function queryOverlays(
     }
   }
 
-  if (!Array.isArray(layers) || layers.length === 0) {
-    console.log("PMTiles: no layers configured, parsed:", layers);
-    return {};
-  }
-  console.log("PMTiles: querying", layers.length, "layers");
+  if (!Array.isArray(layers) || layers.length === 0) return {};
 
   const results = await Promise.allSettled(
     layers.map((layer) => querySingleLayer(bucket, layer, lat, lng))
@@ -277,9 +263,6 @@ export async function queryOverlays(
   const overlays: Record<string, OverlayResult> = {};
   for (let i = 0; i < layers.length; i++) {
     const result = results[i];
-    if (result.status === "rejected") {
-      console.error("PMTiles: layer", layers[i].name, "failed:", result.reason);
-    }
     if (result.status === "fulfilled" && result.value) {
       overlays[layers[i].name] = result.value;
     }

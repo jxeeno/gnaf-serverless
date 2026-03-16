@@ -426,11 +426,9 @@ app.get("/api/addresses/:pid", async (c) => {
   const body = formatAddressResponse(pid, record);
 
   // Query PMTiles overlays if configured
-  console.log("PMTiles debug: PMTILES_BUCKET =", !!c.env.PMTILES_BUCKET, "PMTILES_LAYERS =", c.env.PMTILES_LAYERS);
   if (c.env.PMTILES_BUCKET && c.env.PMTILES_LAYERS) {
     const defaultGeocode = body.geocoding.geocodes.find((g) => g.default) ??
       body.geocoding.geocodes[0];
-    console.log("PMTiles debug: defaultGeocode =", defaultGeocode?.latitude, defaultGeocode?.longitude);
     if (defaultGeocode) {
       try {
         const overlays = await queryOverlays(
@@ -439,7 +437,6 @@ app.get("/api/addresses/:pid", async (c) => {
           defaultGeocode.latitude,
           defaultGeocode.longitude
         );
-        console.log("PMTiles debug: overlays =", JSON.stringify(overlays));
         if (Object.keys(overlays).length > 0) {
           body.overlays = overlays;
         }
