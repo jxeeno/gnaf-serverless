@@ -131,6 +131,12 @@ export interface ShardMetadata {
   datum: string;
 }
 
+/** Result of a PMTiles point-in-polygon overlay query */
+export interface OverlayResult {
+  label: string;
+  properties: Record<string, string | number | boolean>;
+}
+
 /** Full addressr-compatible API response */
 export interface AddressResponse {
   pid: string;
@@ -195,4 +201,5 @@ export interface AddressResponse {
       type: { code: string; name: string };
     }>;
   };
+  overlays?: Record<string, OverlayResult>;
 }

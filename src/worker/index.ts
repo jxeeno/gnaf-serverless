@@ -13,12 +13,15 @@ import {
   fetchStreetShard,
   fetchLatestVersion,
 } from "./r2.js";
+import { queryOverlays } from "./pmtiles.js";
 
 type Bindings = {
   GNAF_BUCKET: R2Bucket;
   GNAF_VERSION?: string;
   SHARD_PREFIX_LENGTH: string;
   SEARCH_DB: D1Database;
+  PMTILES_BUCKET?: R2Bucket;
+  PMTILES_LAYERS?: string;
 };
 
 interface StreetRow {
@@ -421,6 +424,31 @@ app.get("/api/addresses/:pid", async (c) => {
   }
 
   const body = formatAddressResponse(pid, record);
+
+  // Query PMTiles overlays if configured
+  console.log("PMTiles debug: PMTILES_BUCKET =", !!c.env.PMTILES_BUCKET, "PMTILES_LAYERS =", c.env.PMTILES_LAYERS);
+  if (c.env.PMTILES_BUCKET && c.env.PMTILES_LAYERS) {
+    const defaultGeocode = body.geocoding.geocodes.find((g) => g.default) ??
+      body.geocoding.geocodes[0];
+    console.log("PMTiles debug: defaultGeocode =", defaultGeocode?.latitude, defaultGeocode?.longitude);
+    if (defaultGeocode) {
+      try {
+        const overlays = await queryOverlays(
+          c.env.PMTILES_BUCKET,
+          c.env.PMTILES_LAYERS,
+          defaultGeocode.latitude,
+          defaultGeocode.longitude
+        );
+        console.log("PMTiles debug: overlays =", JSON.stringify(overlays));
+        if (Object.keys(overlays).length > 0) {
+          body.overlays = overlays;
+        }
+      } catch (err) {
+        console.error("PMTiles overlay query failed:", err);
+      }
+    }
+  }
+
   const response = c.json(body, 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
     "X-GNAF-Version": gnafVersion,
