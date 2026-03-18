@@ -245,7 +245,7 @@ The `/api/addresses/:pid` endpoint can enrich address responses with additional 
 
 ### Response
 
-When overlays are configured and a match is found, the address response includes an `overlays` field:
+When overlays are configured and a match is found, the address response includes an `overlays` field. Each overlay contains a `features` array with all matching polygons:
 
 ```json
 {
@@ -254,9 +254,9 @@ When overlays are configured and a match is found, the address response includes
   "overlays": {
     "elec_distributor": {
       "label": "Electricity Distributor",
-      "properties": {
-        "elec_distributor": "Evoenergy"
-      }
+      "features": [
+        { "elec_distributor": "Evoenergy" }
+      ]
     }
   }
 }

@@ -19,7 +19,7 @@ export interface PMTilesLayerConfig {
 
 export interface OverlayResult {
   label: string;
-  properties: Record<string, string | number | boolean>;
+  features: Record<string, string | number | boolean>[];
 }
 
 /**
@@ -202,6 +202,8 @@ async function querySingleLayer(
 
   const { px, py } = latLngToTilePixel(lat, lng, z, x, y, layer.extent);
 
+  const features: Record<string, string | number | boolean>[] = [];
+
   for (let i = 0; i < layer.length; i++) {
     const feature = layer.feature(i);
 
@@ -223,11 +225,13 @@ async function querySingleLayer(
         props = { ...feature.properties };
       }
 
-      return { label: config.label, properties: props };
+      features.push(props);
     }
   }
 
-  return null;
+  if (features.length === 0) return null;
+
+  return { label: config.label, features };
 }
 
 /**

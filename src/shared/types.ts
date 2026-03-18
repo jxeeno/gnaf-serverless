@@ -134,7 +134,7 @@ export interface ShardMetadata {
 /** Result of a PMTiles point-in-polygon overlay query */
 export interface OverlayResult {
   label: string;
-  properties: Record<string, string | number | boolean>;
+  features: Record<string, string | number | boolean>[];
 }
 
 /** Full addressr-compatible API response */

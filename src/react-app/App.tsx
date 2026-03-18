@@ -241,14 +241,16 @@ function AddressDetail({ address }: { address: AddressResponse }) {
                   {Object.entries(address.overlays).map(([key, overlay]) => (
                     <div key={key}>
                       <p className="text-xs font-medium text-muted-foreground mb-1.5">{overlay.label}</p>
-                      <div className="grid grid-cols-[1fr_2fr] gap-x-2 gap-y-1 text-sm">
-                        {Object.entries(overlay.properties).map(([prop, value]) => (
-                          <Fragment key={prop}>
-                            <span className="text-muted-foreground truncate" title={prop}>{prop}</span>
-                            <span className="font-mono text-xs break-all">{String(value)}</span>
-                          </Fragment>
-                        ))}
-                      </div>
+                      {overlay.features.map((feature, fi) => (
+                        <div key={fi} className={`grid grid-cols-[1fr_2fr] gap-x-2 gap-y-1 text-sm${fi > 0 ? " mt-2 pt-2 border-t" : ""}`}>
+                          {Object.entries(feature).map(([prop, value]) => (
+                            <Fragment key={prop}>
+                              <span className="text-muted-foreground truncate" title={prop}>{prop}</span>
+                              <span className="font-mono text-xs break-all">{String(value)}</span>
+                            </Fragment>
+                          ))}
+                        </div>
+                      ))}
                     </div>
                   ))}
                 </CardContent>
