@@ -1,3 +1,4 @@
+import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -181,6 +182,29 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
                       </>
                     )}
                   </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {address.overlays && Object.keys(address.overlays).length > 0 && (
+              <Card className="sm:col-span-2">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Overlays</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {Object.entries(address.overlays).map(([key, overlay]) => (
+                    <div key={key}>
+                      <p className="text-xs font-medium text-muted-foreground mb-1.5">{overlay.label}</p>
+                      <div className="grid grid-cols-[1fr_2fr] gap-x-2 gap-y-1 text-sm">
+                        {Object.entries(overlay.properties).map(([prop, value]) => (
+                          <React.Fragment key={prop}>
+                            <span className="text-muted-foreground truncate" title={prop}>{prop}</span>
+                            <span className="font-mono text-xs break-all">{String(value)}</span>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </CardContent>
               </Card>
             )}

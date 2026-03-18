@@ -181,7 +181,7 @@ Each quarterly GNAF release is published as a [GitHub release](https://github.co
 1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
 2. Create the R2 bucket and extract/upload:
    ```bash
-   npx wrangler r2 bucket create gnaf-data
+   npx wrangler r2 bucket create gnaf-data --location oc
    tar -xf gnaf-shards-v20260301-gda2020.tar
    # Upload via R2's S3-compatible API
    aws s3 sync . s3://gnaf-data/gnaf/v20260301-gda2020/ \
@@ -203,6 +203,64 @@ Each quarterly GNAF release is published as a [GitHub release](https://github.co
    done
    ```
 5. Set the `GNAF_VERSION` var in `wrangler.json` to match (e.g. `v20260301-gda2020`)
+
+## PMTiles Overlays
+
+The `/api/addresses/:pid` endpoint can enrich address responses with additional geographic attributes (e.g. electricity distributor, SA1/SA2, LGA, electorate) by performing point-in-polygon queries against PMTiles vector tile files stored in a separate R2 bucket.
+
+### Setup
+
+1. Create the R2 bucket with an Oceania location hint (for Australian data):
+   ```bash
+   npx wrangler r2 bucket create gnaf-pmtiles --location oc
+   ```
+
+2. Upload PMTiles files to the bucket:
+   ```bash
+   npx wrangler r2 object put gnaf-pmtiles/elec_distributor_12.pmtiles --file=elec_distributor_12.pmtiles
+   ```
+
+3. Configure `PMTILES_LAYERS` in `wrangler.json` (or `.dev.vars` for local dev):
+   ```json
+   [
+     {
+       "name": "elec_distributor",
+       "label": "Electricity Distributor",
+       "file": "elec_distributor_12.pmtiles",
+       "layer": "elec_distributor",
+       "zoom": 12,
+       "properties": ["elec_distributor"]
+     }
+   ]
+   ```
+
+   | Field | Description |
+   |-------|-------------|
+   | `name` | Unique key in the response `overlays` object |
+   | `label` | Human-readable display label |
+   | `file` | PMTiles filename in the R2 bucket |
+   | `layer` | Vector tile layer name within the PMTiles file |
+   | `zoom` | Zoom level to query tiles at |
+   | `properties` | Which feature properties to include (omit for all) |
+
+### Response
+
+When overlays are configured and a match is found, the address response includes an `overlays` field:
+
+```json
+{
+  "pid": "GAACT717940975",
+  "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
+  "overlays": {
+    "elec_distributor": {
+      "label": "Electricity Distributor",
+      "properties": {
+        "elec_distributor": "Evoenergy"
+      }
+    }
+  }
+}
+```
 
 ## Deployment
 
