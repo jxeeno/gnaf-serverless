@@ -445,15 +445,23 @@ export function computeHighlightRanges(
     offset = prefixStr.length + 1; // +1 for the space after prefix
   }
 
-  // Street name
+  // Street name — split into individual words for multi-word names (e.g., "KING GEORGES")
   const snStart = upperText.indexOf(components.streetName.toUpperCase(), offset);
   if (snStart !== -1) {
-    componentPositions.push({
-      value: components.streetName,
-      start: snStart,
-      end: snStart + components.streetName.length,
-      isStreetType: false,
-    });
+    const words = components.streetName.split(/\s+/);
+    let wordOffset = snStart;
+    for (const word of words) {
+      const wordStart = upperText.indexOf(word.toUpperCase(), wordOffset);
+      if (wordStart !== -1) {
+        componentPositions.push({
+          value: word,
+          start: wordStart,
+          end: wordStart + word.length,
+          isStreetType: false,
+        });
+        wordOffset = wordStart + word.length;
+      }
+    }
     offset = snStart + components.streetName.length;
   }
 
@@ -485,15 +493,23 @@ export function computeHighlightRanges(
     }
   }
 
-  // Locality
+  // Locality — split into individual words for multi-word names (e.g., "BEVERLY HILLS")
   const locStart = upperText.indexOf(components.localityName.toUpperCase(), offset);
   if (locStart !== -1) {
-    componentPositions.push({
-      value: components.localityName,
-      start: locStart,
-      end: locStart + components.localityName.length,
-      isStreetType: false,
-    });
+    const words = components.localityName.split(/\s+/);
+    let wordOffset = locStart;
+    for (const word of words) {
+      const wordStart = upperText.indexOf(word.toUpperCase(), wordOffset);
+      if (wordStart !== -1) {
+        componentPositions.push({
+          value: word,
+          start: wordStart,
+          end: wordStart + word.length,
+          isStreetType: false,
+        });
+        wordOffset = wordStart + word.length;
+      }
+    }
   }
 
   // State
