@@ -357,3 +357,231 @@ export function scoreAddress(
 
   return 0;
 }
+
+export interface HighlightComponents {
+  streetName: string;
+  streetType?: string | null;
+  streetSuffix?: string | null;
+  localityName: string;
+  state: string;
+  postcode?: string | null;
+  displayPrefix?: string | null;
+}
+
+/**
+ * Check if a query token matches a component, considering abbreviation synonyms.
+ * Returns true if the token is a prefix match, synonym match, or abbreviation-aware match.
+ */
+function tokenMatchesComponent(
+  token: string,
+  component: string,
+  isStreetType: boolean
+): boolean {
+  const upperToken = token.toUpperCase();
+  const upperComp = component.toUpperCase().replace(/'/g, "");
+
+  // Direct prefix match (strip apostrophes for comparison)
+  if (upperComp.startsWith(upperToken)) return true;
+
+  if (!isStreetType) return false;
+
+  // Street type synonym-aware matching:
+  // Check if the token and street_type share a synonym group
+  const tokenSyns = SYNONYMS[upperToken];
+  if (tokenSyns && tokenSyns.includes(upperComp)) return true;
+
+  // Check if token prefix-matches the full form of the street type
+  // e.g., "ROA" prefix-matches "ROAD", and "ROAD" is synonym of "RD"
+  const compSyns = SYNONYMS[upperComp];
+  if (compSyns) {
+    for (const syn of compSyns) {
+      if (syn.startsWith(upperToken)) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Compute highlight ranges for a display/SLA string based on query matching.
+ * Returns sorted, non-overlapping [start, end) ranges.
+ */
+export function computeHighlightRanges(
+  text: string,
+  components: HighlightComponents,
+  originalQuery: string
+): [number, number][] {
+  // Tokenize the original query (same logic as parseSearchQuery but keep all tokens)
+  const allTokens = originalQuery
+    .toUpperCase()
+    .split(/[-\s,/]+/)
+    .map((t) => t.replace(/[^\w']/g, ""))
+    .filter(Boolean);
+
+  if (allTokens.length === 0) return [];
+
+  const numTokens = allTokens.filter((t) => /^\d+[A-Z]?$/.test(t));
+  const textTokens = allTokens.filter((t) => !/^\d+[A-Z]?$/.test(t));
+
+  // Build a map of component → [start, end) position in the text
+  const upperText = text.toUpperCase();
+  const componentPositions: {
+    value: string;
+    start: number;
+    end: number;
+    isStreetType: boolean;
+  }[] = [];
+
+  // Find each component's position in the text by scanning known structure
+  // Display format: "STREET_NAME [STREET_TYPE] [STREET_SUFFIX], LOCALITY, STATE[, POSTCODE]"
+  // SLA format: "[PREFIX ]STREET_NAME [STREET_TYPE] [STREET_SUFFIX], LOCALITY STATE [POSTCODE]"
+
+  const prefixStr = components.displayPrefix || "";
+  let offset = 0;
+
+  // Display prefix (for SLA)
+  if (prefixStr) {
+    // Prefix tokens like "UNIT 3, 28" — highlight number matches within
+    offset = prefixStr.length + 1; // +1 for the space after prefix
+  }
+
+  // Street name
+  const snStart = upperText.indexOf(components.streetName.toUpperCase(), offset);
+  if (snStart !== -1) {
+    componentPositions.push({
+      value: components.streetName,
+      start: snStart,
+      end: snStart + components.streetName.length,
+      isStreetType: false,
+    });
+    offset = snStart + components.streetName.length;
+  }
+
+  // Street type
+  if (components.streetType) {
+    const stStart = upperText.indexOf(components.streetType.toUpperCase(), offset);
+    if (stStart !== -1) {
+      componentPositions.push({
+        value: components.streetType,
+        start: stStart,
+        end: stStart + components.streetType.length,
+        isStreetType: true,
+      });
+      offset = stStart + components.streetType.length;
+    }
+  }
+
+  // Street suffix
+  if (components.streetSuffix) {
+    const ssStart = upperText.indexOf(components.streetSuffix.toUpperCase(), offset);
+    if (ssStart !== -1) {
+      componentPositions.push({
+        value: components.streetSuffix,
+        start: ssStart,
+        end: ssStart + components.streetSuffix.length,
+        isStreetType: false,
+      });
+      offset = ssStart + components.streetSuffix.length;
+    }
+  }
+
+  // Locality
+  const locStart = upperText.indexOf(components.localityName.toUpperCase(), offset);
+  if (locStart !== -1) {
+    componentPositions.push({
+      value: components.localityName,
+      start: locStart,
+      end: locStart + components.localityName.length,
+      isStreetType: false,
+    });
+  }
+
+  // State
+  const stateStart = upperText.indexOf(components.state.toUpperCase(), offset);
+  if (stateStart !== -1) {
+    componentPositions.push({
+      value: components.state,
+      start: stateStart,
+      end: stateStart + components.state.length,
+      isStreetType: false,
+    });
+  }
+
+  // Postcode
+  if (components.postcode) {
+    const pcStart = upperText.indexOf(components.postcode, offset);
+    if (pcStart !== -1) {
+      componentPositions.push({
+        value: components.postcode,
+        start: pcStart,
+        end: pcStart + components.postcode.length,
+        isStreetType: false,
+      });
+    }
+  }
+
+  const ranges: [number, number][] = [];
+
+  // Match text tokens against components
+  for (const token of textTokens) {
+    const cleanToken = token.replace(/'/g, "");
+    for (const comp of componentPositions) {
+      if (tokenMatchesComponent(cleanToken, comp.value, comp.isStreetType)) {
+        // For synonym/abbreviation matches, highlight the whole component
+        // For prefix matches, highlight just the matched portion
+        const cleanComp = comp.value.toUpperCase().replace(/'/g, "");
+        if (cleanComp.startsWith(cleanToken)) {
+          // Prefix match: compute how many chars of the actual text to highlight
+          // Account for apostrophes in the text that aren't in the token
+          let textIdx = comp.start;
+          let matched = 0;
+          while (textIdx < comp.end && matched < cleanToken.length) {
+            if (text[textIdx] === "'") {
+              textIdx++;
+              continue;
+            }
+            matched++;
+            textIdx++;
+          }
+          // Include any trailing apostrophes
+          while (textIdx < comp.end && text[textIdx] === "'") textIdx++;
+          ranges.push([comp.start, textIdx]);
+        } else {
+          // Synonym/abbreviation match: highlight entire component
+          ranges.push([comp.start, comp.end]);
+        }
+        break; // Each token matches at most one component
+      }
+    }
+  }
+
+  // Match numeric tokens in display prefix
+  if (prefixStr) {
+    const prefixEnd = prefixStr.length;
+    for (const num of numTokens) {
+      let idx = 0;
+      while (idx < prefixEnd) {
+        const found = upperText.indexOf(num, idx);
+        if (found === -1 || found >= prefixEnd) break;
+        ranges.push([found, found + num.length]);
+        idx = found + num.length;
+      }
+    }
+  }
+
+  if (ranges.length === 0) return [];
+
+  // Sort and merge overlapping ranges
+  ranges.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [ranges[0]];
+  for (let i = 1; i < ranges.length; i++) {
+    const last = merged[merged.length - 1];
+    if (ranges[i][0] <= last[1]) {
+      last[1] = Math.max(last[1], ranges[i][1]);
+    } else {
+      merged.push(ranges[i]);
+    }
+  }
+
+  return merged;
+}

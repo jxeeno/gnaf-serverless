@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSearchQuery, scoreAddress } from "./search-query.js";
+import { parseSearchQuery, scoreAddress, computeHighlightRanges } from "./search-query.js";
 import type { StreetAddressEntry } from "./types.js";
 
 // ──────────────────────────────────────────────
@@ -1096,5 +1096,123 @@ describe("scoreAddress", () => {
       const parsed = parseSearchQuery("5 murray")!;
       expect(scoreAddress(entry({ d: "" }), parsed)).toBe(0);
     });
+  });
+});
+
+// ──────────────────────────────────────────────
+// computeHighlightRanges
+// ──────────────────────────────────────────────
+
+describe("computeHighlightRanges", () => {
+  const baseComponents = {
+    streetName: "MURRAY",
+    streetType: "RD",
+    streetSuffix: null,
+    localityName: "VILLAWOOD",
+    state: "NSW",
+    postcode: "2163",
+  };
+
+  it("highlights street name and type for basic query", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd");
+    expect(ranges).toEqual([[0, 6], [7, 9]]);
+  });
+
+  it("highlights abbreviation via synonym match (ROA → ROAD → RD)", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray roa");
+    expect(ranges).toEqual([[0, 6], [7, 9]]);
+  });
+
+  it("highlights partial locality match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd villa");
+    expect(ranges).toEqual([[0, 6], [7, 9], [11, 16]]);
+  });
+
+  it("highlights full locality match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd villawood");
+    expect(ranges).toEqual([[0, 6], [7, 9], [11, 20]]);
+  });
+
+  it("does not false-positive match ST inside FORREST", () => {
+    const display = "FORREST ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "FORREST",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "forrest st");
+    // ST should only highlight the street type at position 8-10, not inside FORREST
+    expect(ranges).toEqual([[0, 7], [8, 10]]);
+  });
+
+  it("highlights street number in display prefix (SLA)", () => {
+    const sla = "28 MURRAY RD, VILLAWOOD NSW 2163";
+    const ranges = computeHighlightRanges(sla, {
+      ...baseComponents,
+      displayPrefix: "28",
+    }, "28 murray");
+    expect(ranges).toContainEqual([0, 2]); // "28"
+    expect(ranges).toContainEqual([3, 9]); // "MURRAY"
+  });
+
+  it("highlights unit + flat + street number in SLA", () => {
+    const sla = "UNIT 3, 28 MURRAY RD, VILLAWOOD NSW 2163";
+    const ranges = computeHighlightRanges(sla, {
+      ...baseComponents,
+      displayPrefix: "UNIT 3, 28",
+    }, "unit 3 28 murray");
+    expect(ranges).toContainEqual([5, 6]); // "3"
+    expect(ranges).toContainEqual([8, 10]); // "28"
+    expect(ranges).toContainEqual([11, 17]); // "MURRAY"
+  });
+
+  it("highlights apostrophe street name when query omits apostrophe", () => {
+    const display = "O'DEA ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "O'DEA",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "odea st");
+    expect(ranges).toEqual([[0, 5], [6, 8]]);
+  });
+
+  it("highlights apostrophe street name when query includes apostrophe", () => {
+    const display = "O'DEA ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "O'DEA",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "o'dea st");
+    expect(ranges).toEqual([[0, 5], [6, 8]]);
+  });
+
+  it("returns empty array for empty query", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    expect(computeHighlightRanges(display, baseComponents, "")).toEqual([]);
+  });
+
+  it("highlights state match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray nsw");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([22, 25]); // NSW
+  });
+
+  it("highlights postcode match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray 2163");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
   });
 });

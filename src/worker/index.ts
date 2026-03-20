@@ -5,7 +5,7 @@ import {
   formatAddressResponse,
   reconstructSla,
 } from "../shared/address-format.js";
-import { parseSearchQuery, scoreAddress } from "../shared/search-query.js";
+import { parseSearchQuery, scoreAddress, computeHighlightRanges } from "../shared/search-query.js";
 import type { StreetAddressEntry } from "../shared/types.js";
 import {
   fetchAddressShard,
@@ -233,6 +233,14 @@ app.get("/api/addresses/search", async (c) => {
   const streets = matchedStreets.slice(0, limit).map((r) => ({
     streetId: r.id,
     display: r.display,
+    highlight: computeHighlightRanges(r.display, {
+      streetName: r.street_name,
+      streetType: r.street_type,
+      streetSuffix: r.street_suffix,
+      localityName: r.locality_name,
+      state: r.state,
+      postcode: r.postcode,
+    }, q),
     streetName: r.street_name,
     locality: r.locality_name,
     state: r.state,
@@ -300,7 +308,14 @@ app.get("/api/addresses/search", async (c) => {
   interface ScoredAddress {
     pid: string;
     sla: string;
+    displayPrefix: string;
     streetId: number;
+    streetName: string;
+    streetType: string | null;
+    streetSuffix: string | null;
+    localityName: string;
+    state: string;
+    postcode: string | null;
     score: number;
   }
 
@@ -335,7 +350,14 @@ app.get("/api/addresses/search", async (c) => {
         scoredAddresses.push({
           pid: entry.p,
           sla: entryToSla(entry, street),
+          displayPrefix: entry.d,
           streetId: street.id,
+          streetName: street.street_name,
+          streetType: street.street_type,
+          streetSuffix: street.street_suffix,
+          localityName: street.locality_name,
+          state: street.state,
+          postcode: street.postcode,
           score,
         });
       }
@@ -373,6 +395,15 @@ app.get("/api/addresses/search", async (c) => {
   const addresses = addressResults.map((a) => ({
     pid: a.pid,
     sla: a.sla,
+    highlight: computeHighlightRanges(a.sla, {
+      streetName: a.streetName,
+      streetType: a.streetType,
+      streetSuffix: a.streetSuffix,
+      localityName: a.localityName,
+      state: a.state,
+      postcode: a.postcode,
+      displayPrefix: a.displayPrefix,
+    }, q),
     streetId: a.streetId,
   }));
 
