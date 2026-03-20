@@ -9,6 +9,9 @@ export const SHARD_PREFIX_LENGTH = parseInt(
   10
 );
 
+/** When set (e.g. "0"–"f"), only process shard prefixes starting with this hex digit */
+export const SHARD_PARTITION = process.env.SHARD_PARTITION ?? "";
+
 export const DATA_DIR = path.resolve(process.cwd(), "data");
 export const GNAF_ZIP_PATH = path.join(DATA_DIR, "gnaf.zip");
 export const GNAF_EXTRACT_DIR = path.join(DATA_DIR, "gnaf");

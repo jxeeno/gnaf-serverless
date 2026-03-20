@@ -12,6 +12,7 @@ export const Route = createFileRoute("/")({
 interface SearchResult {
   streetId: number;
   display: string;
+  highlight?: [number, number][];
   streetName: string;
   locality: string;
   state: string;
@@ -22,6 +23,7 @@ interface SearchResult {
 interface SearchAddressResult {
   pid: string;
   sla: string;
+  highlight?: [number, number][];
   streetId: number;
 }
 
@@ -51,38 +53,13 @@ interface RequestLogEntry {
   stale: boolean;
 }
 
-/** Highlight matching portions of text */
-function HighlightMatch({ text, query }: { text: string; query: string }) {
-  if (!query.trim()) return <>{text}</>;
-
-  const tokens = query.toUpperCase().split(/[\s,/]+/).filter(Boolean);
-  const upperText = text.toUpperCase();
-
-  const ranges: [number, number][] = [];
-  for (const token of tokens) {
-    let idx = 0;
-    while ((idx = upperText.indexOf(token, idx)) !== -1) {
-      ranges.push([idx, idx + token.length]);
-      idx += token.length;
-    }
-  }
-
-  if (ranges.length === 0) return <>{text}</>;
-
-  ranges.sort((a, b) => a[0] - b[0]);
-  const merged: [number, number][] = [ranges[0]];
-  for (let i = 1; i < ranges.length; i++) {
-    const last = merged[merged.length - 1];
-    if (ranges[i][0] <= last[1]) {
-      last[1] = Math.max(last[1], ranges[i][1]);
-    } else {
-      merged.push(ranges[i]);
-    }
-  }
+/** Render text with server-provided highlight ranges */
+function HighlightMatch({ text, highlight }: { text: string; highlight?: [number, number][] }) {
+  if (!highlight || highlight.length === 0) return <>{text}</>;
 
   const parts: React.ReactElement[] = [];
   let prev = 0;
-  for (const [start, end] of merged) {
+  for (const [start, end] of highlight) {
     if (prev < start) {
       parts.push(<span key={prev}>{text.slice(prev, start)}</span>);
     }
@@ -457,7 +434,7 @@ function IndexPage() {
                     >
                       <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <span className="text-sm truncate">
-                        <HighlightMatch text={addr.sla} query={query} />
+                        <HighlightMatch text={addr.sla} highlight={addr.highlight} />
                       </span>
                     </Link>
                   );
@@ -492,7 +469,7 @@ function IndexPage() {
                         <span className="text-sm truncate">
                           <HighlightMatch
                             text={result.display}
-                            query={query}
+                            highlight={result.highlight}
                           />
                         </span>
                       </div>

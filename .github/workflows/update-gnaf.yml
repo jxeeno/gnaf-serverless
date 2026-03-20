@@ -76,11 +76,15 @@ jobs:
           retention-days: 1
           compression-level: 1
 
-  # ── Stage 2a: Generate address + lot/DP shards (parallel) ──────────────
+  # ── Stage 2a: Generate address + lot/DP shards (16-way parallel) ──────
   shard:
     needs: build-db
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        partition: ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
     steps:
       - uses: actions/checkout@v5
 
@@ -98,10 +102,58 @@ jobs:
           name: gnaf-duckdb
           path: data
 
-      - name: Shard data
+      - name: Shard data (partition ${{ matrix.partition }})
         run: npm run pipeline:shard
+        env:
+          SHARD_PARTITION: ${{ matrix.partition }}
 
       - name: Upload shard artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: gnaf-shards-${{ matrix.partition }}
+          path: |
+            data/shards/addresses/
+            data/shards/lotdp/
+            data/shards/_partial_meta_*.json
+          retention-days: 1
+          compression-level: 1
+
+  # ── Stage 2a-merge: Combine shard partitions and generate metadata ────
+  merge-shards:
+    needs: shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all shard partitions
+        uses: actions/download-artifact@v5
+        with:
+          pattern: gnaf-shards-*
+          merge-multiple: true
+          path: data/shards
+
+      - name: Generate metadata
+        run: |
+          TOTAL_ADDRESSES=$(jq -r '.totalAddresses' data/shards/_partial_meta_0.json)
+          TOTAL_SHARDS=$(ls data/shards/addresses/ | wc -l | tr -d ' ')
+          TOTAL_LOTDP=$(ls data/shards/lotdp/ | wc -l | tr -d ' ')
+          VERSION="v$(date -u +%Y%m%d)-${GNAF_DATUM,,}"
+          DATE=$(date -u -Iseconds)
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg date "$DATE" \
+            --argjson spl "${SHARD_PREFIX_LENGTH}" \
+            --argjson total "$TOTAL_ADDRESSES" \
+            --argjson shards "$TOTAL_SHARDS" \
+            --argjson lotdp "$TOTAL_LOTDP" \
+            --arg datum "$GNAF_DATUM" \
+            '{version: $version, date: $date, shardPrefixLength: $spl, totalAddresses: $total, totalShards: $shards, totalLotDpShards: $lotdp, datum: $datum}' \
+            > data/shards/metadata.json
+
+          rm -f data/shards/_partial_meta_*.json
+          echo "Metadata: $(cat data/shards/metadata.json)"
+
+      - name: Upload merged shard artifacts
         uses: actions/upload-artifact@v5
         with:
           name: gnaf-shards
@@ -149,7 +201,7 @@ jobs:
 
   # ── Stage 3: Create GitHub release ────────────────────────────────────
   release:
-    needs: [shard, search-index]
+    needs: [merge-shards, search-index]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -243,4 +295,5 @@ jobs:
           name: |
             gnaf-duckdb
             gnaf-shards
+            gnaf-shards-*
             gnaf-search-index
