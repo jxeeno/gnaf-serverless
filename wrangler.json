@@ -30,13 +30,14 @@
 	},
 	"vars": {
 		"SHARD_PREFIX_LENGTH": "3",
-		"PMTILES_LAYERS": "[{\"name\":\"elec_distributor\",\"label\":\"Electricity Distributor\",\"file\":\"elec_distributor_12.pmtiles\",\"layer\":\"elec_distributor\",\"zoom\":12,\"properties\":[\"elec_distributor\"]}]"
+		"PMTILES_LAYERS": "[{\"name\":\"elec_distributor\",\"label\":\"Electricity Distributor\",\"file\":\"elec_distributor_12.pmtiles\",\"layer\":\"elec_distributor\",\"zoom\":12,\"properties\":[\"elec_distributor\"]}]",
+		"GNAF_VERSION": "v20260320-gda2020"
 	},
 	"d1_databases": [
 		{
 			"binding": "SEARCH_DB",
-			"database_name": "gnaf-search",
-			"database_id": "b3061346-8fd8-4fc2-bbaa-1f3af23d4759"
+			"database_name": "gnaf-search-v20260320-gda2020",
+			"database_id": "0d1c8d4a-3a30-4e4d-84f7-7b56d6060cb0"
 		}
 	],
 	"r2_buckets": [
