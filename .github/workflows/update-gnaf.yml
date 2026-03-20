@@ -29,9 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -50,7 +50,7 @@ jobs:
           echo "cache_key=gnaf-zip-${CACHE_KEY}" >> "$GITHUB_OUTPUT"
 
       - name: Restore GNAF ZIP cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: data/gnaf.zip
           key: ${{ steps.gnaf-version.outputs.cache_key }}
@@ -60,7 +60,7 @@ jobs:
 
       - name: Save GNAF ZIP cache
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: data/gnaf.zip
           key: ${{ steps.gnaf-version.outputs.cache_key }}
@@ -69,7 +69,7 @@ jobs:
         run: npm run pipeline:import
 
       - name: Upload DuckDB artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gnaf-duckdb
           path: data/gnaf.duckdb
@@ -82,9 +82,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -93,7 +93,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: gnaf-duckdb
           path: data
@@ -102,7 +102,7 @@ jobs:
         run: npm run pipeline:shard
 
       - name: Upload shard artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gnaf-shards
           path: |
@@ -118,9 +118,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -129,7 +129,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: gnaf-duckdb
           path: data
@@ -138,7 +138,7 @@ jobs:
         run: npm run pipeline:search-index
 
       - name: Upload search index artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gnaf-search-index
           path: |
@@ -153,9 +153,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -164,13 +164,13 @@ jobs:
         run: npm ci
 
       - name: Download shard artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: gnaf-shards
           path: data/shards
 
       - name: Download search index artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: gnaf-search-index
           path: data/shards
@@ -238,7 +238,7 @@ jobs:
 
       - name: Delete artifacts
         if: always()
-        uses: geekyeggo/delete-artifact@v5
+        uses: geekyeggo/delete-artifact@v6
         with:
           name: |
             gnaf-duckdb

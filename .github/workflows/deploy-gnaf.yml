@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -96,11 +96,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Update wrangler.json with new D1 database
+      - name: Update wrangler.json with new D1 database and GNAF version
         run: |
           jq --arg id "${{ steps.d1.outputs.db_id }}" \
              --arg name "${{ steps.d1.outputs.db_name }}" \
-             '.d1_databases[0].database_id = $id | .d1_databases[0].database_name = $name' \
+             --arg version "${{ steps.version.outputs.version }}" \
+             '.d1_databases[0].database_id = $id | .d1_databases[0].database_name = $name | .vars.GNAF_VERSION = $version' \
              wrangler.json > wrangler.json.tmp && mv wrangler.json.tmp wrangler.json
 
       - name: Commit and push
@@ -108,5 +109,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add wrangler.json
-          git commit -m "chore: update D1 database to ${{ steps.d1.outputs.db_name }}"
+          git commit -m "chore: deploy GNAF ${{ steps.version.outputs.version }}"
           git push
