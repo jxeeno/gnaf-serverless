@@ -1,55 +1,57 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "gnaf-s3-query",
-	"main": "./src/worker/index.ts",
-	"compatibility_date": "2025-10-08",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"observability": {
-		"enabled": true
-	},
-	"upload_source_maps": true,
-	"build": {
-		"watch_dir": [
-			"src/worker",
-			"src/shared",
-			"src/react-app",
-			"src/components"
-		]
-	},
-	"routes": [
-		{
-			"pattern": "gnaf.k3n.au",
-			"custom_domain": true
-		}
-	],
-	"assets": {
-		"not_found_handling": "single-page-application",
-		"run_worker_first": ["/api/*"]
-	},
-	"vars": {
-		"SHARD_PREFIX_LENGTH": "3",
-		"PMTILES_LAYERS": "[{\"name\":\"elec_distributor\",\"label\":\"Electricity Distributor\",\"file\":\"elec_distributor_12.pmtiles\",\"layer\":\"elec_distributor\",\"zoom\":12,\"properties\":[\"elec_distributor\"]}]",
-		"GNAF_VERSION": "v20260320-gda2020"
-	},
-	"d1_databases": [
-		{
-			"binding": "SEARCH_DB",
-			"database_name": "gnaf-search-v20260320-gda2020",
-			"database_id": "0d1c8d4a-3a30-4e4d-84f7-7b56d6060cb0"
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "GNAF_BUCKET",
-			"bucket_name": "gnaf-data",
-			"remote": true
-		},
-		{
-			"binding": "PMTILES_BUCKET",
-			"bucket_name": "gnaf-pmtiles",
-			"remote": true
-		}
-	]
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gnaf-s3-query",
+  "main": "./src/worker/index.ts",
+  "compatibility_date": "2025-10-08",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+  "build": {
+    "watch_dir": [
+      "src/worker",
+      "src/shared",
+      "src/react-app",
+      "src/components"
+    ]
+  },
+  "routes": [
+    {
+      "pattern": "gnaf.k3n.au",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "vars": {
+    "SHARD_PREFIX_LENGTH": "3",
+    "PMTILES_LAYERS": "[{\"name\":\"elec_distributor\",\"label\":\"Electricity Distributor\",\"file\":\"elec_distributor_12.pmtiles\",\"layer\":\"elec_distributor\",\"zoom\":12,\"properties\":[\"elec_distributor\"]}]",
+    "GNAF_VERSION": "v20260320-feb2026-gda2020"
+  },
+  "d1_databases": [
+    {
+      "binding": "SEARCH_DB",
+      "database_name": "gnaf-search-v20260320-feb2026-gda2020",
+      "database_id": "database_id"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "GNAF_BUCKET",
+      "bucket_name": "gnaf-data",
+      "remote": true
+    },
+    {
+      "binding": "PMTILES_BUCKET",
+      "bucket_name": "gnaf-pmtiles",
+      "remote": true
+    }
+  ]
 }
