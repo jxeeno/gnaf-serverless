@@ -299,38 +299,54 @@ describe("parseSearchQuery", () => {
       expect(r.ftsQuery).toBe('"CHRISTMAS" AND MURRAY*');
     });
 
-    it("expands street type synonyms with OR", () => {
+    it("resolves full form street type to exact match (last token)", () => {
       const r = parseSearchQuery("murray road")!;
-      // ROAD should expand to (ROAD* OR RD*)
-      expect(r.ftsQuery).toMatch(/\(ROAD\* OR RD\*\)/);
-      expect(r.ftsQuery).toContain('"MURRAY"');
+      // ROAD is already the resolved full form — exact match, no wildcard
+      expect(r.ftsQuery).toBe('"MURRAY" AND ROAD');
     });
 
-    it("expands abbreviations to full forms", () => {
+    it("resolves abbreviation to exact full form + keeps original as prefix (last token)", () => {
       const r = parseSearchQuery("murray rd")!;
-      // RD maps to [RD, ROAD] — either order is fine
-      expect(r.ftsQuery).toMatch(/\((RD\* OR ROAD\*|ROAD\* OR RD\*)\)/);
+      // RD → ROAD (exact), original RD* kept for prefix matching
+      expect(r.ftsQuery).toBe('"MURRAY" AND (ROAD OR RD*)');
     });
 
-    it("expands informal abbreviation AVE to AVENUE and AV", () => {
+    it("resolves informal abbreviation AVE (last token)", () => {
       const r = parseSearchQuery("murray ave")!;
-      expect(r.ftsQuery).toContain("AVE*");
-      expect(r.ftsQuery).toContain("AVENUE*");
-      expect(r.ftsQuery).toContain("AV*");
+      // AVE → AVENUE (exact), original AVE* kept for prefix matching (e.g., AVALON)
+      expect(r.ftsQuery).toBe('"MURRAY" AND (AVENUE OR AVE*)');
     });
 
-    it("expands informal abbreviation CRES to CRESCENT and CR", () => {
+    it("resolves informal abbreviation CRES (last token)", () => {
       const r = parseSearchQuery("murray cres")!;
-      expect(r.ftsQuery).toContain("CRES*");
-      expect(r.ftsQuery).toContain("CRESCENT*");
-      expect(r.ftsQuery).toContain("CR*");
+      // CRES → CRESCENT (exact), original CRES* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (CRESCENT OR CRES*)');
     });
 
-    it("expands informal abbreviation BLVD to BOULEVARD and BVD", () => {
+    it("resolves informal abbreviation BLVD (last token)", () => {
       const r = parseSearchQuery("murray blvd")!;
-      expect(r.ftsQuery).toContain("BLVD*");
-      expect(r.ftsQuery).toContain("BOULEVARD*");
-      expect(r.ftsQuery).toContain("BVD*");
+      // BLVD → BOULEVARD (exact), original BLVD* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (BOULEVARD OR BLVD*)');
+    });
+
+    it("partial full-form prefix matches naturally", () => {
+      // User types "ROA" — not a known abbreviation, stays as ROA* which matches ROAD in index
+      const r = parseSearchQuery("murray roa")!;
+      expect(r.ftsQuery).toBe('"MURRAY" AND ROA*');
+    });
+
+    it("abbreviation prefix still matches locality names (av → AVALON)", () => {
+      // "AV" is a known abbreviation for AVENUE — exact AVENUE + prefix AV*
+      const r = parseSearchQuery("av")!;
+      expect(r.ftsQuery).toContain("AV*");
+      expect(r.ftsQuery).toContain("AVENUE");
+      expect(r.ftsQuery).not.toContain("AVENUE*");
+    });
+
+    it("resolves abbreviation in non-last position to full form only", () => {
+      const r = parseSearchQuery("murray rd sydney")!;
+      expect(r.ftsQuery).toContain('"ROAD"');
+      expect(r.ftsQuery).not.toContain('"RD"');
     });
 
     it("numbers are excluded from FTS query", () => {
@@ -360,9 +376,9 @@ describe("scoreAddress", () => {
   }
 
   describe("no numbers in query", () => {
-    it("returns 1 (representative) for any entry", () => {
+    it("returns 2 (preferred) for bare street entry without flat/level", () => {
       const parsed = parseSearchQuery("murray street")!;
-      expect(scoreAddress(entry({ d: "28" }), parsed)).toBe(1);
+      expect(scoreAddress(entry({ d: "28" }), parsed)).toBe(2);
     });
   });
 

@@ -44,6 +44,24 @@ function buildDisplay(row: {
   return parts.join(", ");
 }
 
+/** Build a display_search string using full-form street types for better FTS prefix matching */
+function buildDisplaySearch(row: {
+  street_name: string;
+  street_type_full: string;
+  street_suffix: string;
+  locality_name: string;
+  state: string;
+  postcode: string;
+}): string {
+  const parts = [row.street_name];
+  if (row.street_type_full) parts[0] += ` ${row.street_type_full}`;
+  if (row.street_suffix) parts[0] += ` ${row.street_suffix}`;
+  parts.push(row.locality_name);
+  parts.push(row.state);
+  if (row.postcode) parts.push(row.postcode);
+  return parts.join(", ").replace(/'/g, "");
+}
+
 /** Build a street key from components (same format used for S3 shard lookup) */
 function buildStreetKey(
   streetName: string,
@@ -67,6 +85,7 @@ const INSERT_BATCH_SIZE = 200;
 interface StreetEntry {
   id: number;
   display: string;
+  display_search: string;
   street_key: string;
   shard_prefix: string;
   street_name: string;
@@ -170,6 +189,7 @@ export async function generateSearchIndex(): Promise<void> {
     SELECT
       street_name,
       COALESCE(street_type_abbrev, '') AS street_type,
+      COALESCE(street_type_code, '') AS street_type_full,
       COALESCE(street_suffix_code, '') AS street_suffix,
       locality_name,
       state,
@@ -195,6 +215,7 @@ export async function generateSearchIndex(): Promise<void> {
     const row = streetRows[i];
     const sName = row.street_name as string;
     const sType = row.street_type as string;
+    const sTypeFull = row.street_type_full as string;
     const sSuffix = row.street_suffix as string;
     const locName = row.locality_name as string;
     const st = row.state as string;
@@ -207,6 +228,14 @@ export async function generateSearchIndex(): Promise<void> {
       display: buildDisplay({
         street_name: sName,
         street_type: sType,
+        street_suffix: sSuffix,
+        locality_name: locName,
+        state: st,
+        postcode: pc,
+      }),
+      display_search: buildDisplaySearch({
+        street_name: sName,
+        street_type_full: sTypeFull,
         street_suffix: sSuffix,
         locality_name: locName,
         state: st,
@@ -431,7 +460,7 @@ export async function generateSearchIndex(): Promise<void> {
     const values = batch
       .map(
         (s) =>
-          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.display.replace(/'/g, ""))}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"},${s.num_min ?? "NULL"},${s.num_max ?? "NULL"},${s.flat_min ?? "NULL"},${s.flat_max ?? "NULL"})`
+          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.display_search)}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"},${s.num_min ?? "NULL"},${s.num_max ?? "NULL"},${s.flat_min ?? "NULL"},${s.flat_max ?? "NULL"})`
       )
       .join(",\n");
     sqlStatements.push(

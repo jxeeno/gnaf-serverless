@@ -184,6 +184,28 @@ for (const [alias, target] of INFORMAL_ALIASES) {
 export const SYNONYMS: Record<string, string[]> = _synonyms;
 
 /**
+ * Maps street type abbreviations (and informal aliases) to their canonical full form.
+ * Used at query time to convert abbreviations to full forms for FTS5 search,
+ * since the index stores full-form street type names.
+ * e.g., "RD" → "ROAD", "ST" → "STREET", "AVE" → "AVENUE"
+ */
+export const ABBREVIATION_TO_FULL: Record<string, string> = {};
+for (const [full, abbrev] of STREET_TYPE_PAIRS) {
+  ABBREVIATION_TO_FULL[abbrev.toUpperCase()] = full.toUpperCase();
+}
+for (const [alias, target] of INFORMAL_ALIASES) {
+  const ua = alias.toUpperCase();
+  const ut = target.toUpperCase();
+  if (!ABBREVIATION_TO_FULL[ua]) {
+    // If target is a full form (first element of a pair), map alias directly
+    const isFullForm = STREET_TYPE_PAIRS.some(([f]) => f.toUpperCase() === ut);
+    if (isFullForm) {
+      ABBREVIATION_TO_FULL[ua] = ut;
+    }
+  }
+}
+
+/**
  * Set of all flat type and level type keywords.
  * These should be stripped from FTS5 search terms since they don't
  * appear in the street display column.

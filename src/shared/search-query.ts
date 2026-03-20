@@ -1,5 +1,6 @@
 import {
   SYNONYMS,
+  ABBREVIATION_TO_FULL,
   FLAT_LEVEL_KEYWORDS,
   LEVEL_KEYWORDS,
 } from "./synonyms.js";
@@ -182,12 +183,33 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
   }
 
   // Expand text tokens with synonyms and build FTS5 query
+  // Resolve abbreviations to full forms since the FTS index stores full-form street types
   const ftsTokens = textTokens.map((t, i) => {
     const syns = SYNONYMS[t] ?? [t];
     const isLast = i === textTokens.length - 1;
-    // FTS5: prefix queries use token* (no quotes), exact terms use "token"
-    const parts = syns.map((s) => (isLast ? `${s}*` : `"${s}"`));
-    return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
+    // Resolve abbreviations to full forms, then deduplicate
+    const resolved = [...new Set(syns.map((s) => ABBREVIATION_TO_FULL[s] ?? s))];
+    if (isLast) {
+      // Resolved full forms get exact match (abbreviation definitively resolved).
+      // Original token gets prefix search (could be start of any word, e.g. "AV" → AVALON).
+      const parts: string[] = [];
+      const seen = new Set<string>();
+      for (const s of syns) {
+        const full = ABBREVIATION_TO_FULL[s];
+        if (full && !seen.has(full)) {
+          seen.add(full);
+          parts.push(full); // exact — resolved abbreviation
+        }
+      }
+      if (!seen.has(t)) {
+        parts.push(`${t}*`); // prefix — original token
+      }
+      return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
+    } else {
+      // Exact match: only use resolved full forms
+      const parts = resolved.map((s) => `"${s}"`);
+      return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
+    }
   });
   const ftsQuery = ftsTokens.join(" AND ");
 
