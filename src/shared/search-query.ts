@@ -198,7 +198,8 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
         const full = ABBREVIATION_TO_FULL[s];
         if (full && !seen.has(full)) {
           seen.add(full);
-          parts.push(full); // exact — resolved abbreviation
+          // Quote multi-word resolved forms (e.g., "NORTH EAST" from NE)
+          parts.push(full.includes(" ") ? `"${full}"` : full);
         }
       }
       if (!seen.has(t)) {
@@ -378,7 +379,7 @@ export interface HighlightComponents {
 function tokenMatchesComponent(
   token: string,
   component: string,
-  isStreetType: boolean
+  synonymAware: boolean
 ): boolean {
   const upperToken = token.toUpperCase();
   const upperComp = component.toUpperCase().replace(/'/g, "");
@@ -386,9 +387,9 @@ function tokenMatchesComponent(
   // Direct prefix match (strip apostrophes for comparison)
   if (upperComp.startsWith(upperToken)) return true;
 
-  if (!isStreetType) return false;
+  if (!synonymAware) return false;
 
-  // Street type synonym-aware matching:
+  // Street type/suffix synonym-aware matching:
   // Check if the token and street_type share a synonym group
   const tokenSyns = SYNONYMS[upperToken];
   if (tokenSyns && tokenSyns.includes(upperComp)) return true;
@@ -432,7 +433,7 @@ export function computeHighlightRanges(
     value: string;
     start: number;
     end: number;
-    isStreetType: boolean;
+    synonymAware: boolean;
   }[] = [];
 
   // Find each component's position in the text by scanning known structure
@@ -460,7 +461,7 @@ export function computeHighlightRanges(
           value: word,
           start: wordStart,
           end: wordStart + word.length,
-          isStreetType: false,
+          synonymAware: false,
         });
         wordOffset = wordStart + word.length;
       }
@@ -476,7 +477,7 @@ export function computeHighlightRanges(
         value: components.streetType,
         start: stStart,
         end: stStart + components.streetType.length,
-        isStreetType: true,
+        synonymAware: true,
       });
       offset = stStart + components.streetType.length;
     }
@@ -490,7 +491,7 @@ export function computeHighlightRanges(
         value: components.streetSuffix,
         start: ssStart,
         end: ssStart + components.streetSuffix.length,
-        isStreetType: false,
+        synonymAware: true,
       });
       offset = ssStart + components.streetSuffix.length;
     }
@@ -508,7 +509,7 @@ export function computeHighlightRanges(
           value: word,
           start: wordStart,
           end: wordStart + word.length,
-          isStreetType: false,
+          synonymAware: false,
         });
         wordOffset = wordStart + word.length;
       }
@@ -522,7 +523,7 @@ export function computeHighlightRanges(
       value: components.state,
       start: stateStart,
       end: stateStart + components.state.length,
-      isStreetType: false,
+      synonymAware: false,
     });
   }
 
@@ -534,7 +535,7 @@ export function computeHighlightRanges(
         value: components.postcode,
         start: pcStart,
         end: pcStart + components.postcode.length,
-        isStreetType: false,
+        synonymAware: false,
       });
     }
   }
@@ -545,7 +546,7 @@ export function computeHighlightRanges(
   for (const token of textTokens) {
     const cleanToken = token.replace(/'/g, "");
     for (const comp of componentPositions) {
-      if (tokenMatchesComponent(cleanToken, comp.value, comp.isStreetType)) {
+      if (tokenMatchesComponent(cleanToken, comp.value, comp.synonymAware)) {
         // For synonym/abbreviation matches, highlight the whole component
         // For prefix matches, highlight just the matched portion
         const cleanComp = comp.value.toUpperCase().replace(/'/g, "");

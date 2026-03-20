@@ -349,6 +349,24 @@ describe("parseSearchQuery", () => {
       expect(r.ftsQuery).toContain('"RD"');
     });
 
+    it("resolves street suffix abbreviation N to full form NORTH (last token)", () => {
+      const r = parseSearchQuery("murray rd n")!;
+      expect(r.ftsQuery).toContain("NORTH");
+      expect(r.ftsQuery).toContain("N*");
+    });
+
+    it("resolves multi-word suffix NE to quoted NORTH EAST (last token)", () => {
+      const r = parseSearchQuery("murray rd ne")!;
+      expect(r.ftsQuery).toContain('"NORTH EAST"');
+      expect(r.ftsQuery).toContain("NE*");
+    });
+
+    it("resolves suffix abbreviation in non-last position", () => {
+      const r = parseSearchQuery("murray rd n sydney")!;
+      expect(r.ftsQuery).toContain('"NORTH"');
+      expect(r.ftsQuery).toContain('"N"');
+    });
+
     it("numbers are excluded from FTS query", () => {
       const r = parseSearchQuery("28 murray")!;
       expect(r.ftsQuery).not.toContain("28");
@@ -1214,5 +1232,35 @@ describe("computeHighlightRanges", () => {
     const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
     const ranges = computeHighlightRanges(display, baseComponents, "murray 2163");
     expect(ranges).toContainEqual([0, 6]); // MURRAY
+  });
+
+  it("highlights street suffix via synonym match (NORTH typed as N)", () => {
+    const display = "MURRAY RD N, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "MURRAY",
+      streetType: "RD",
+      streetSuffix: "N",
+      localityName: "VILLAWOOD",
+      state: "NSW",
+      postcode: "2163",
+    }, "murray rd north");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([7, 9]); // RD
+    expect(ranges).toContainEqual([10, 11]); // N (full component highlighted via synonym)
+  });
+
+  it("highlights street suffix when query uses abbreviation", () => {
+    const display = "MURRAY RD N, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "MURRAY",
+      streetType: "RD",
+      streetSuffix: "N",
+      localityName: "VILLAWOOD",
+      state: "NSW",
+      postcode: "2163",
+    }, "murray rd n");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([7, 9]); // RD
+    expect(ranges).toContainEqual([10, 11]); // N
   });
 });

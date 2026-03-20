@@ -92,15 +92,15 @@ const STREET_TYPE_PAIRS: [string, string][] = [
   ["WOOD", "WD"], ["WOODS", "WDS"],
 ];
 
-// Street suffixes: CODE → NAME
-// const STREET_SUFFIX_PAIRS: [string, string][] = [
-//   ["CN", "CENTRAL"], ["DE", "DEVIATION"], ["E", "EAST"],
-//   ["EX", "EXTENSION"], ["IN", "INNER"], ["LR", "LOWER"],
-//   ["ML", "MALL"], ["N", "NORTH"], ["NE", "NORTH EAST"],
-//   ["NW", "NORTH WEST"], ["OF", "OFF"], ["OP", "OVERPASS"],
-//   ["OT", "OUTER"], ["S", "SOUTH"], ["SE", "SOUTH EAST"],
-//   ["SW", "SOUTH WEST"], ["UP", "UPPER"], ["W", "WEST"],
-// ];
+// Street suffixes: CODE (abbreviation) → NAME (full)
+const STREET_SUFFIX_PAIRS: [string, string][] = [
+  ["CN", "CENTRAL"], ["DE", "DEVIATION"], ["E", "EAST"],
+  ["EX", "EXTENSION"], ["IN", "INNER"], ["LR", "LOWER"],
+  ["ML", "MALL"], ["N", "NORTH"], ["NE", "NORTH EAST"],
+  ["NW", "NORTH WEST"], ["OF", "OFF"], ["OP", "OVERPASS"],
+  ["OT", "OUTER"], ["S", "SOUTH"], ["SE", "SOUTH EAST"],
+  ["SW", "SOUTH WEST"], ["UP", "UPPER"], ["W", "WEST"],
+];
 
 // Flat types: CODE (abbreviation) → NAME (full)
 const FLAT_TYPE_PAIRS: [string, string][] = [
@@ -132,7 +132,7 @@ const LEVEL_TYPE_PAIRS: [string, string][] = [
 
 const _synonyms: Record<string, string[]> = {
   ...buildSynonymMap(STREET_TYPE_PAIRS),
-  // ...buildSynonymMap(STREET_SUFFIX_PAIRS),
+  ...buildSynonymMap(STREET_SUFFIX_PAIRS),
   ...buildSynonymMap(FLAT_TYPE_PAIRS),
   ...buildSynonymMap(LEVEL_TYPE_PAIRS),
 };
@@ -192,6 +192,14 @@ export const SYNONYMS: Record<string, string[]> = _synonyms;
 export const ABBREVIATION_TO_FULL: Record<string, string> = {};
 for (const [full, abbrev] of STREET_TYPE_PAIRS) {
   ABBREVIATION_TO_FULL[abbrev.toUpperCase()] = full.toUpperCase();
+}
+// Street suffix pairs: [abbreviation, full] — opposite order from street type pairs
+for (const [abbrev, full] of STREET_SUFFIX_PAIRS) {
+  const ua = abbrev.toUpperCase();
+  const uf = full.toUpperCase();
+  if (!ABBREVIATION_TO_FULL[ua]) {
+    ABBREVIATION_TO_FULL[ua] = uf;
+  }
 }
 for (const [alias, target] of INFORMAL_ALIASES) {
   const ua = alias.toUpperCase();

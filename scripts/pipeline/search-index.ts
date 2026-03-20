@@ -44,18 +44,18 @@ function buildDisplay(row: {
   return parts.join(", ");
 }
 
-/** Build a display_search string using full-form street types for better FTS prefix matching */
+/** Build a display_search string using full-form street types and suffixes for better FTS prefix matching */
 function buildDisplaySearch(row: {
   street_name: string;
   street_type_full: string;
-  street_suffix: string;
+  street_suffix_full: string;
   locality_name: string;
   state: string;
   postcode: string;
 }): string {
   const parts = [row.street_name];
   if (row.street_type_full) parts[0] += ` ${row.street_type_full}`;
-  if (row.street_suffix) parts[0] += ` ${row.street_suffix}`;
+  if (row.street_suffix_full) parts[0] += ` ${row.street_suffix_full}`;
   parts.push(row.locality_name);
   parts.push(row.state);
   if (row.postcode) parts.push(row.postcode);
@@ -191,6 +191,7 @@ export async function generateSearchIndex(): Promise<void> {
       COALESCE(street_type_abbrev, '') AS street_type,
       COALESCE(ANY_VALUE(street_type_code), '') AS street_type_full,
       COALESCE(street_suffix_code, '') AS street_suffix,
+      COALESCE(ANY_VALUE(street_suffix_name), '') AS street_suffix_full,
       locality_name,
       state,
       COALESCE(postcode, '') AS postcode,
@@ -217,6 +218,7 @@ export async function generateSearchIndex(): Promise<void> {
     const sType = row.street_type as string;
     const sTypeFull = row.street_type_full as string;
     const sSuffix = row.street_suffix as string;
+    const sSuffixFull = row.street_suffix_full as string;
     const locName = row.locality_name as string;
     const st = row.state as string;
     const pc = row.postcode as string;
@@ -236,7 +238,7 @@ export async function generateSearchIndex(): Promise<void> {
       display_search: buildDisplaySearch({
         street_name: sName,
         street_type_full: sTypeFull,
-        street_suffix: sSuffix,
+        street_suffix_full: sSuffixFull,
         locality_name: locName,
         state: st,
         postcode: pc,
