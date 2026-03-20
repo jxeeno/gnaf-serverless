@@ -189,7 +189,7 @@ export async function generateSearchIndex(): Promise<void> {
     SELECT
       street_name,
       COALESCE(street_type_abbrev, '') AS street_type,
-      COALESCE(street_type_code, '') AS street_type_full,
+      COALESCE(ANY_VALUE(street_type_code), '') AS street_type_full,
       COALESCE(street_suffix_code, '') AS street_suffix,
       locality_name,
       state,
