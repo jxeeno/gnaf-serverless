@@ -1,0 +1,112 @@
+name: Deploy GNAF to Cloudflare
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to deploy (leave empty for latest)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  NODE_OPTIONS: '--max-old-space-size=4096'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            VERSION="${{ inputs.tag }}"
+          else
+            VERSION=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying version: $VERSION"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Download release archive
+        run: |
+          gh release download "${{ steps.version.outputs.version }}" \
+            --pattern "gnaf-shards-*.tar" \
+            --dir data/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Extract shards
+        run: |
+          mkdir -p data/shards
+          tar -xf data/gnaf-shards-*.tar -C data/shards
+
+      - name: Upload to R2
+        run: npm run pipeline:upload
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+
+      - name: Create new D1 database
+        id: d1
+        run: |
+          DB_NAME="gnaf-search-${{ steps.version.outputs.version }}"
+          OUTPUT=$(npx wrangler d1 create "$DB_NAME" --location=OC 2>&1)
+          echo "$OUTPUT"
+          DB_ID=$(echo "$OUTPUT" | grep 'database_id' | cut -d'"' -f2)
+          if [ -z "$DB_ID" ]; then
+            echo "::error::Failed to parse database_id from wrangler output"
+            exit 1
+          fi
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+          echo "db_name=$DB_NAME" >> "$GITHUB_OUTPUT"
+          echo "Created D1 database: $DB_NAME ($DB_ID)"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Import search index to D1
+        run: |
+          for f in data/shards/search-index/*.sql; do
+            echo "Executing $f..."
+            npx wrangler d1 execute "${{ steps.d1.outputs.db_name }}" --remote --file="$f"
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Update wrangler.json with new D1 database
+        run: |
+          jq --arg id "${{ steps.d1.outputs.db_id }}" \
+             --arg name "${{ steps.d1.outputs.db_name }}" \
+             '.d1_databases[0].database_id = $id | .d1_databases[0].database_name = $name' \
+             wrangler.json > wrangler.json.tmp && mv wrangler.json.tmp wrangler.json
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add wrangler.json
+          git commit -m "chore: update D1 database to ${{ steps.d1.outputs.db_name }}"
+          git push

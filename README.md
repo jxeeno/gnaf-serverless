@@ -160,23 +160,23 @@ npm run pipeline:upload        # Upload shards to R2
 
 ### Loading the Search Index
 
-The search index is split into chunk files for reliable D1 import:
+The search index is loaded into D1 automatically by the [Deploy workflow](.github/workflows/deploy-gnaf.yml), which creates a fresh D1 database per release and updates `wrangler.json` with the new database ID.
+
+For local development:
 
 ```bash
-# Local
 for f in data/shards/search-index/*.sql; do
   npx wrangler d1 execute gnaf-search --local --file="$f"
-done
-
-# Remote
-for f in data/shards/search-index/*.sql; do
-  npx wrangler d1 execute gnaf-search --remote --file="$f"
 done
 ```
 
 ## Using Pre-built Data
 
-Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index. You can skip the pipeline and upload directly.
+Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index.
+
+The [Deploy workflow](.github/workflows/deploy-gnaf.yml) runs automatically on each release — it uploads shards to R2, creates a new D1 database, and updates `wrangler.json`. You can also re-trigger it manually from the Actions tab.
+
+To deploy manually instead:
 
 1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
 2. Create the R2 bucket and extract/upload:
@@ -195,14 +195,14 @@ Each quarterly GNAF release is published as a [GitHub release](https://github.co
    echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://gnaf-data/gnaf/latest.json \
      --endpoint-url https://<account_id>.r2.cloudflarestorage.com
    ```
-4. Load the search index into D1:
+4. Create a D1 database and load the search index:
    ```bash
-   npx wrangler d1 create gnaf-search  # first time only
+   npx wrangler d1 create gnaf-search-v20260301-gda2020 --location=OC
    for f in search-index/*.sql; do
-     npx wrangler d1 execute gnaf-search --remote --file="$f"
+     npx wrangler d1 execute gnaf-search-v20260301-gda2020 --remote --file="$f"
    done
    ```
-5. Set the `GNAF_VERSION` var in `wrangler.json` to match (e.g. `v20260301-gda2020`)
+5. Update the `database_id` and `database_name` in `wrangler.json` to match the new D1 database
 
 ## PMTiles Overlays
 
