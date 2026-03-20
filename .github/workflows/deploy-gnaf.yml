@@ -74,7 +74,7 @@ jobs:
           DB_NAME="gnaf-search-${{ steps.version.outputs.version }}"
           OUTPUT=$(npx wrangler d1 create "$DB_NAME" --location=oc 2>&1)
           echo "$OUTPUT"
-          DB_ID=$(echo "$OUTPUT" | grep 'database_id' | cut -d'"' -f2)
+          DB_ID=$(echo "$OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
           if [ -z "$DB_ID" ]; then
             echo "::error::Failed to parse database_id from wrangler output"
             exit 1
