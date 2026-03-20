@@ -343,10 +343,10 @@ describe("parseSearchQuery", () => {
       expect(r.ftsQuery).not.toContain("AVENUE*");
     });
 
-    it("resolves abbreviation in non-last position to full form only", () => {
+    it("resolves abbreviation in non-last position, keeping original too", () => {
       const r = parseSearchQuery("murray rd sydney")!;
       expect(r.ftsQuery).toContain('"ROAD"');
-      expect(r.ftsQuery).not.toContain('"RD"');
+      expect(r.ftsQuery).toContain('"RD"');
     });
 
     it("numbers are excluded from FTS query", () => {

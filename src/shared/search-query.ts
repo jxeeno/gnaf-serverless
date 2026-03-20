@@ -206,8 +206,11 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
       }
       return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
     } else {
-      // Exact match: only use resolved full forms
-      const parts = resolved.map((s) => `"${s}"`);
+      // Exact match: use resolved full forms + keep original token
+      // (original needed because token may be a street name that collides
+      // with an abbreviation, e.g. "LYNN" the street vs "LYNN" abbrev for LYNNE)
+      const all = [...new Set([...resolved, t])];
+      const parts = all.map((s) => `"${s}"`);
       return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
     }
   });
