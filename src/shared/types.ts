@@ -129,6 +129,7 @@ export interface ShardMetadata {
   totalShards: number;
   totalLotDpShards: number;
   datum: string;
+  gnafReleaseName?: string;
 }
 
 /** Result of a PMTiles point-in-polygon overlay query */

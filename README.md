@@ -190,19 +190,14 @@ To deploy manually instead:
    aws s3 cp metadata.json s3://gnaf-data/gnaf/v20260301-gda2020/metadata.json \
      --endpoint-url https://<account_id>.r2.cloudflarestorage.com
    ```
-3. Create a version pointer:
-   ```bash
-   echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://gnaf-data/gnaf/latest.json \
-     --endpoint-url https://<account_id>.r2.cloudflarestorage.com
-   ```
-4. Create a D1 database and load the search index:
+3. Create a D1 database and load the search index:
    ```bash
    npx wrangler d1 create gnaf-search-v20260301-gda2020 --location=OC
    for f in search-index/*.sql; do
      npx wrangler d1 execute gnaf-search-v20260301-gda2020 --remote --file="$f"
    done
    ```
-5. Update the `database_id` and `database_name` in `wrangler.json` to match the new D1 database
+4. Update `wrangler.json` with the new D1 `database_id`, `database_name`, and set `vars.GNAF_VERSION` to the version string (e.g. `v20260301-gda2020`)
 
 ## PMTiles Overlays
 

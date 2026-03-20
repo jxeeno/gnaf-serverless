@@ -28,6 +28,8 @@ jobs:
   build-db:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      gnaf_release_name: ${{ steps.gnaf-version.outputs.gnaf_release_name }}
     steps:
       - uses: actions/checkout@v5
 
@@ -49,6 +51,12 @@ jobs:
           CACHE_KEY=$(echo "$RESOURCE_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
           echo "cache_key=gnaf-zip-${CACHE_KEY}" >> "$GITHUB_OUTPUT"
 
+          # Extract GNAF release name (e.g. "FEB 2026" → "February 2026")
+          RELEASE_SHORT=$(echo "$RESOURCE_NAME" | grep -oP '^\w+ \d{4}')
+          GNAF_RELEASE_NAME=$(date -d "1 ${RELEASE_SHORT}" +"%B %Y" 2>/dev/null || echo "$RELEASE_SHORT")
+          echo "gnaf_release_name=$GNAF_RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          echo "GNAF release: $GNAF_RELEASE_NAME"
+
       - name: Restore GNAF ZIP cache
         uses: actions/cache/restore@v5
         with:
@@ -69,7 +77,7 @@ jobs:
         run: npm run pipeline:import
 
       - name: Upload DuckDB artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: gnaf-duckdb
           path: data/gnaf.duckdb
@@ -82,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         partition: ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
     steps:
@@ -97,7 +105,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: gnaf-duckdb
           path: data
@@ -108,7 +116,7 @@ jobs:
           SHARD_PARTITION: ${{ matrix.partition }}
 
       - name: Upload shard artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: gnaf-shards-${{ matrix.partition }}
           path: |
@@ -120,12 +128,12 @@ jobs:
 
   # ── Stage 2a-merge: Combine shard partitions and generate metadata ────
   merge-shards:
-    needs: shard
+    needs: [shard, build-db]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Download all shard partitions
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           pattern: gnaf-shards-*
           merge-multiple: true
@@ -138,6 +146,7 @@ jobs:
           TOTAL_LOTDP=$(ls data/shards/lotdp/ | wc -l | tr -d ' ')
           VERSION="v$(date -u +%Y%m%d)-${GNAF_DATUM,,}"
           DATE=$(date -u -Iseconds)
+          GNAF_RELEASE_NAME="${{ needs.build-db.outputs.gnaf_release_name }}"
 
           jq -n \
             --arg version "$VERSION" \
@@ -147,14 +156,15 @@ jobs:
             --argjson shards "$TOTAL_SHARDS" \
             --argjson lotdp "$TOTAL_LOTDP" \
             --arg datum "$GNAF_DATUM" \
-            '{version: $version, date: $date, shardPrefixLength: $spl, totalAddresses: $total, totalShards: $shards, totalLotDpShards: $lotdp, datum: $datum}' \
+            --arg gnafRelease "$GNAF_RELEASE_NAME" \
+            '{version: $version, date: $date, shardPrefixLength: $spl, totalAddresses: $total, totalShards: $shards, totalLotDpShards: $lotdp, datum: $datum, gnafReleaseName: $gnafRelease}' \
             > data/shards/metadata.json
 
           rm -f data/shards/_partial_meta_*.json
           echo "Metadata: $(cat data/shards/metadata.json)"
 
       - name: Upload merged shard artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: gnaf-shards
           path: |
@@ -181,7 +191,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: gnaf-duckdb
           path: data
@@ -190,7 +200,7 @@ jobs:
         run: npm run pipeline:search-index
 
       - name: Upload search index artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: gnaf-search-index
           path: |
@@ -216,13 +226,13 @@ jobs:
         run: npm ci
 
       - name: Download shard artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: gnaf-shards
           path: data/shards
 
       - name: Download search index artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: gnaf-search-index
           path: data/shards
@@ -234,10 +244,12 @@ jobs:
           DATE=$(jq -r .date data/shards/metadata.json)
           TOTAL=$(jq -r .totalAddresses data/shards/metadata.json)
           DATUM=$(jq -r .datum data/shards/metadata.json)
+          GNAF_RELEASE=$(jq -r .gnafReleaseName data/shards/metadata.json)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
           echo "datum=$DATUM" >> "$GITHUB_OUTPUT"
+          echo "gnaf_release=$GNAF_RELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Create release archive
         run: tar -cf gnaf-shards-${{ steps.meta.outputs.version }}.tar -C data/shards .
@@ -247,6 +259,7 @@ jobs:
           cat > release-notes.md <<EOF
           ## GNAF Sharded Data
 
+          - **GNAF release**: ${{ steps.meta.outputs.gnaf_release }}
           - **Version**: ${{ steps.meta.outputs.version }}
           - **Datum**: ${{ steps.meta.outputs.datum }}
           - **Total addresses**: ${{ steps.meta.outputs.total }}
@@ -284,7 +297,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.meta.outputs.version }}" \
-            --title "GNAF ${{ steps.meta.outputs.version }}" \
+            --title "GNAF ${{ steps.meta.outputs.gnaf_release }} (${{ steps.meta.outputs.version }})" \
             --notes-file release-notes.md \
             gnaf-shards-${{ steps.meta.outputs.version }}.tar
 
