@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 env:
   NODE_OPTIONS: '--max-old-space-size=4096'
@@ -300,6 +301,12 @@ jobs:
             --title "GNAF ${{ steps.meta.outputs.gnaf_release }} (${{ steps.meta.outputs.version }})" \
             --notes-file release-notes.md \
             gnaf-shards-${{ steps.meta.outputs.version }}.tar
+
+      - name: Trigger deploy workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run deploy-gnaf.yml -f tag="${{ steps.meta.outputs.version }}"
 
       - name: Delete artifacts
         if: always()
