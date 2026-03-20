@@ -145,9 +145,10 @@ jobs:
           TOTAL_ADDRESSES=$(jq -r '.totalAddresses' data/shards/_partial_meta_0.json)
           TOTAL_SHARDS=$(ls data/shards/addresses/ | wc -l | tr -d ' ')
           TOTAL_LOTDP=$(ls data/shards/lotdp/ | wc -l | tr -d ' ')
-          VERSION="v$(date -u +%Y%m%d)-${GNAF_DATUM,,}"
           DATE=$(date -u -Iseconds)
           GNAF_RELEASE_NAME="${{ needs.build-db.outputs.gnaf_release_name }}"
+          GNAF_RELEASE_SHORT=$(echo "$GNAF_RELEASE_NAME" | awk '{print tolower(substr($1,1,3)) $2}')
+          VERSION="v$(date -u +%Y%m%d)-${GNAF_RELEASE_SHORT}-${GNAF_DATUM,,}"
 
           jq -n \
             --arg version "$VERSION" \
