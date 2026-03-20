@@ -6,7 +6,7 @@ import {
   reconstructSla,
 } from "../shared/address-format.js";
 import { parseSearchQuery, scoreAddress, computeHighlightRanges } from "../shared/search-query.js";
-import type { StreetAddressEntry } from "../shared/types.js";
+import type { ShardMetadata, StreetAddressEntry } from "../shared/types.js";
 import {
   fetchAddressShard,
   fetchLotDpShard,
@@ -98,6 +98,28 @@ const CACHE_TTL = 604800;
 
 // Health check
 app.get("/api/health", (c) => c.json({ status: "ok" }));
+
+// GNAF metadata (version, address count, release info)
+app.get("/api/metadata", async (c) => {
+  const cache = caches.default;
+  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
+  const obj = await c.env.GNAF_BUCKET.get(`gnaf/${gnafVersion}/metadata.json`);
+  if (!obj) {
+    return c.json({ error: "Metadata not found" }, 404);
+  }
+
+  const metadata: ShardMetadata = await obj.json();
+  const response = c.json(metadata, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-GNAF-Version": gnafVersion,
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+});
 
 // Search addresses by query string (autocomplete)
 // Returns { streets: [...], addresses: [...] }
