@@ -9,6 +9,9 @@
   "observability": {
     "enabled": true
   },
+  "placement": {
+    "mode": "smart"
+  },
   "upload_source_maps": true,
   "build": {
     "watch_dir": [
@@ -39,9 +42,13 @@
     {
       "binding": "SEARCH_DB",
       "database_name": "gnaf-search-v20260320-feb2026-gda2020",
-      "database_id": "38423328-cc26-43e2-90bb-645853decee6"
+      "database_id": "38423328-cc26-43e2-90bb-645853decee6",
+	  "remote": true
     }
   ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "r2_buckets": [
     {
       "binding": "GNAF_BUCKET",

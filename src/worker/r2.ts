@@ -1,6 +1,6 @@
 import type { AddressShardData, LotDpShardData, StreetShardData } from "../shared/types.js";
 
-async function fetchAndDecompress(
+export async function fetchAndDecompress(
   bucket: R2Bucket,
   key: string
 ): Promise<string> {
