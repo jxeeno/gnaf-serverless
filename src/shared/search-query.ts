@@ -203,7 +203,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
         }
       }
       if (!seen.has(t)) {
-        parts.push(`${t}*`); // prefix — original token
+        parts.push(`"${t}"*`); // prefix — quoted to avoid FTS5 keyword conflicts (e.g. OR, AND, NOT)
       }
       return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
     } else {
