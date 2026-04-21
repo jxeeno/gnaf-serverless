@@ -7,38 +7,45 @@ const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
 const QUERY_BATCH_SIZE = 20;
 /** Max queries to process per cron invocation (avoids subrequest + CPU limits) */
-const QUERIES_PER_RUN = 40;
+const QUERIES_PER_RUN = 60;
 
 /**
  * Generate all pre-computable short queries:
- * - 2-char: all [a-z0-9] x [a-z0-9] = 1,296
- * - 3-char: [0-9]{2}[a-z] only = 2,600 (e.g., "10k", "25s" — street number + first letter)
- * Total: 3,896
+ * - 1-char: [a-z0-9] = 36
+ * - 2-char letters: [a-z]{2} = 676
+ * - 2-char digits: [0-9]{2} = 100
+ * - 1 digit + space + letter: [0-9] [a-z] = 260
+ * - 2 digits + space + letter: [0-9]{2} [a-z] = 2,600
+ * Total: 3,672
  */
 function generateShortQueries(): string[] {
-  const alphanumeric = "abcdefghijklmnopqrstuvwxyz0123456789";
   const alpha = "abcdefghijklmnopqrstuvwxyz";
   const digits = "0123456789";
   const queries: string[] = [];
 
-  // All 1-char alphanumeric (36 queries)
-  for (const a of alphanumeric) {
-    queries.push(a);
+  // 1-char: all letters and digits (36)
+  for (const c of alpha) queries.push(c);
+  for (const d of digits) queries.push(d);
+
+  // 2-char: all letter pairs (676)
+  for (const a of alpha) {
+    for (const b of alpha) queries.push(a + b);
   }
 
-  // All 2-char alphanumeric combinations
-  for (const a of alphanumeric) {
-    for (const b of alphanumeric) {
-      queries.push(a + b);
-    }
+  // 2-char: all digit pairs (100)
+  for (const a of digits) {
+    for (const b of digits) queries.push(a + b);
   }
 
-  // 3-char: two digits followed by one letter
+  // 1 digit + space + letter (260)
+  for (const d of digits) {
+    for (const c of alpha) queries.push(d + " " + c);
+  }
+
+  // 2 digits + space + letter (2,600)
   for (const d1 of digits) {
     for (const d2 of digits) {
-      for (const c of alpha) {
-        queries.push(d1 + d2 + c);
-      }
+      for (const c of alpha) queries.push(d1 + d2 + " " + c);
     }
   }
 
@@ -47,15 +54,16 @@ function generateShortQueries(): string[] {
 
 /** Check if a normalized query has a pre-computed result */
 export function isPrecomputedQuery(normalized: string): boolean {
-  if (normalized.length === 1) return true;
-  if (normalized.length === 2) return true;
-  if (normalized.length === 3 && /^[0-9]{2}[a-z]$/.test(normalized)) return true;
+  if (/^[a-z0-9]$/.test(normalized)) return true;          // 1-char
+  if (/^[a-z]{2}$/.test(normalized)) return true;           // 2 letters
+  if (/^[0-9]{2}$/.test(normalized)) return true;           // 2 digits
+  if (/^[0-9]{1,2} [a-z]$/.test(normalized)) return true;   // N(N) + space + letter
   return false;
 }
 
-/** Normalize a query string: trim, strip non-alphanumeric, lowercase */
+/** Normalize a query string: trim, collapse whitespace, strip non-alphanumeric (except spaces), lowercase */
 export function normalizeQuery(q: string): string {
-  return q.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  return q.trim().replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, " ").toLowerCase();
 }
 
 /** Load a single pre-computed short query result from R2 (with Cache API caching) */

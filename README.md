@@ -280,14 +280,16 @@ The `scheduled` handler in the worker performs three tasks:
 
 2. **Pre-compute short query results** — runs `executeSearch` for common short queries and stores each result as an individual JSON file in R2 (`gnaf/{version}/precomputed/{query}.json`). These are served directly for matching requests, bypassing D1 + R2 shard lookups entirely.
 
-   Pre-computed query patterns (3,932 total):
+   Pre-computed query patterns (3,672 total):
    | Pattern | Example | Count |
    |---------|---------|-------|
-   | 1-char alphanumeric | `a`, `5` | 36 |
-   | 2-char alphanumeric | `sy`, `10` | 1,296 |
-   | 2 digits + 1 letter | `10k`, `25s` | 2,600 |
+   | 1-char letter or digit | `a`, `5` | 36 |
+   | 2-char all letters | `sy`, `ke` | 676 |
+   | 2-char all digits | `12`, `05` | 100 |
+   | 1 digit + space + letter | `1 m`, `5 k` | 260 |
+   | 2 digits + space + letter | `12 k`, `25 s` | 2,600 |
 
-   Pre-computation is chunked across cron invocations (20 queries per run) to stay within Workers subrequest and CPU limits. Progress is tracked via a `.progress` file in R2, and a `.done` sentinel marks completion. Full pre-computation takes ~3.3 hours on first run for a new GNAF version.
+   Pre-computation is chunked across cron invocations (40 queries per run) to stay within Workers subrequest and CPU limits. Progress is tracked via a `.progress` file in R2, and a `.done` sentinel marks completion. Full pre-computation takes ~1.5 hours on first run for a new GNAF version.
 
 3. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache. Only runs after pre-computation is complete.
 
@@ -295,7 +297,7 @@ The `scheduled` handler in the worker performs three tasks:
 
 When a search request arrives with a short query (e.g. `?q=sy`):
 
-1. The query is normalized: trimmed, non-alphanumeric characters stripped, lowercased
+1. The query is normalized: trimmed, non-alphanumeric characters stripped (spaces preserved), lowercased
 2. If the normalized query matches a pre-computed pattern, the worker loads the result from R2 (with Cache API caching)
 3. The response is returned with an `X-Precomputed: true` header
 4. If no pre-computed result exists, the query falls through to the normal D1 + R2 search path (or returns empty for 1-char queries)
@@ -318,8 +320,9 @@ gnaf/{version}/precomputed/
 ├── .progress          # Current index (deleted on completion)
 ├── a.json             # Pre-computed result for query "a"
 ├── sy.json            # Pre-computed result for query "sy"
-├── 10k.json           # Pre-computed result for query "10k"
-└── ...                # 3,932 files total
+├── 1 m.json           # Pre-computed result for query "1 m"
+├── 12 k.json          # Pre-computed result for query "12 k"
+└── ...                # 3,672 files total
 ```
 
 ## Tech Stack
