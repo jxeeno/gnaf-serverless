@@ -123,7 +123,7 @@ function IndexPage() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setSearchResults([]);
       setSearchAddresses([]);
       setSearchMeta(null);
