@@ -113,7 +113,6 @@ export async function warmShortQueries(
 export async function warmShards(
   bucket: R2Bucket,
   version: string,
-  ctx: ExecutionContext
 ): Promise<void> {
   const cache = caches.default;
 
