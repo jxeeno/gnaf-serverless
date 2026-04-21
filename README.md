@@ -289,7 +289,7 @@ The `scheduled` handler in the worker performs three tasks:
 
    Pre-computation is chunked across cron invocations (20 queries per run) to stay within Workers subrequest and CPU limits. Progress is tracked via a `.progress` file in R2, and a `.done` sentinel marks completion. Full pre-computation takes ~3.3 hours on first run for a new GNAF version.
 
-3. **Warm R2 shard caches** — iterates all 12,288 shard files (3 types × 4,096 prefixes), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache. Only runs after pre-computation is complete.
+3. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache. Only runs after pre-computation is complete.
 
 ### How short query serving works
 

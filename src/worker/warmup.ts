@@ -1,7 +1,8 @@
 import { fetchAndDecompress } from "./r2.js";
 import { executeSearch } from "./search.js";
 
-const SHARD_TYPES = ["streets", "addresses", "lotdp"] as const;
+/** Only warm street shards — these are used by search/autocomplete */
+const SHARD_TYPES = ["streets"] as const;
 const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
 const QUERY_BATCH_SIZE = 20;
