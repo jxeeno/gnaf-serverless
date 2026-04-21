@@ -5,6 +5,8 @@ const SHARD_TYPES = ["streets", "addresses", "lotdp"] as const;
 const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
 const QUERY_BATCH_SIZE = 20;
+/** Max queries to process per cron invocation (avoids subrequest + CPU limits) */
+const QUERIES_PER_RUN = 20;
 
 /**
  * Generate all pre-computable short queries:
@@ -17,6 +19,11 @@ function generateShortQueries(): string[] {
   const alpha = "abcdefghijklmnopqrstuvwxyz";
   const digits = "0123456789";
   const queries: string[] = [];
+
+  // All 1-char alphanumeric (36 queries)
+  for (const a of alphanumeric) {
+    queries.push(a);
+  }
 
   // All 2-char alphanumeric combinations
   for (const a of alphanumeric) {
@@ -39,6 +46,7 @@ function generateShortQueries(): string[] {
 
 /** Check if a normalized query has a pre-computed result */
 export function isPrecomputedQuery(normalized: string): boolean {
+  if (normalized.length === 1) return true;
   if (normalized.length === 2) return true;
   if (normalized.length === 3 && /^[0-9]{2}[a-z]$/.test(normalized)) return true;
   return false;
@@ -83,26 +91,46 @@ export async function loadPrecomputedQuery(
 
 /**
  * Pre-compute short query results and store individually in R2.
- * Skips if already generated for this version (sentinel file exists).
+ * Processes up to QUERIES_PER_RUN queries per invocation to stay within CPU limits.
+ * Uses a progress file to resume across cron runs. Skips if sentinel exists.
  */
 export async function warmShortQueries(
   db: D1Database,
   bucket: R2Bucket,
   version: string,
   ctx: ExecutionContext
-): Promise<void> {
+): Promise<boolean> {
   // Check sentinel file — skip if already generated for this version
   const sentinelKey = `gnaf/${version}/precomputed/.done`;
   const existing = await bucket.head(sentinelKey);
-  if (existing) return;
+  if (existing) return true;
 
-  console.log("Generating pre-computed short query results...");
   const queries = generateShortQueries();
-  let generated = 0;
 
-  // Process in batches to avoid overwhelming D1
-  for (let i = 0; i < queries.length; i += QUERY_BATCH_SIZE) {
-    const batch = queries.slice(i, i + QUERY_BATCH_SIZE);
+  // Read progress file to resume from where we left off
+  const progressKey = `gnaf/${version}/precomputed/.progress`;
+  const progressObj = await bucket.get(progressKey);
+  let startIndex = 0;
+  if (progressObj) {
+    startIndex = parseInt(await progressObj.text(), 10) || 0;
+  }
+
+  if (startIndex >= queries.length) {
+    // All queries done — write sentinel and clean up progress file
+    await bucket.put(sentinelKey, "", {
+      httpMetadata: { contentType: "text/plain" },
+    });
+    await bucket.delete(progressKey);
+    console.log(`Pre-computed all ${queries.length} short query results`);
+    return true;
+  }
+
+  const endIndex = Math.min(startIndex + QUERIES_PER_RUN, queries.length);
+  console.log(`Pre-computing queries ${startIndex}–${endIndex - 1} of ${queries.length}...`);
+
+  // Process this chunk in batches
+  for (let i = startIndex; i < endIndex; i += QUERY_BATCH_SIZE) {
+    const batch = queries.slice(i, Math.min(i + QUERY_BATCH_SIZE, endIndex));
     const batchResults = await Promise.all(
       batch.map(async (q) => {
         const result = await executeSearch(q, 50, db, bucket, version, ctx);
@@ -120,16 +148,24 @@ export async function warmShortQueries(
         )
       )
     );
-
-    generated += batch.length;
   }
 
-  // Write sentinel file to mark completion
-  await bucket.put(sentinelKey, "", {
+  if (endIndex >= queries.length) {
+    // Finished — write sentinel and clean up progress file
+    await bucket.put(sentinelKey, "", {
+      httpMetadata: { contentType: "text/plain" },
+    });
+    await bucket.delete(progressKey);
+    console.log(`Pre-computed all ${queries.length} short query results`);
+    return true;
+  }
+
+  // Save progress for next cron run
+  await bucket.put(progressKey, String(endIndex), {
     httpMetadata: { contentType: "text/plain" },
   });
-
-  console.log(`Pre-computed ${generated} short query results`);
+  console.log(`Progress saved at ${endIndex}/${queries.length}`);
+  return false;
 }
 
 /**

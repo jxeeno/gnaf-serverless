@@ -91,9 +91,9 @@ app.get("/api/metadata", async (c) => {
 // Returns { streets: [...], addresses: [...] }
 app.get("/api/addresses/search", async (c) => {
   const q = c.req.query("q")?.trim();
-  if (!q || q.length < 2) {
+  if (!q || q.length < 1) {
     return c.json(
-      { error: "Query must be at least 2 characters" },
+      { error: "Query must be at least 1 character" },
       400
     );
   }
@@ -128,6 +128,17 @@ app.get("/api/addresses/search", async (c) => {
       c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
     }
+  }
+
+  // 1-char queries are only served from pre-computed data — skip D1/R2 search
+  if (q.length < 2) {
+    const response = c.json(
+      { streets: [], addresses: [] },
+      200,
+      { "Cache-Control": "public, max-age=604800" }
+    );
+    c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
   }
 
   // Full search via D1 + R2
@@ -420,9 +431,11 @@ export default {
     await env.SEARCH_DB.prepare("SELECT 1").first();
 
     // Pre-compute short query results (once per version, stored in R2)
-    await warmShortQueries(env.SEARCH_DB, env.GNAF_BUCKET, version, ctx);
+    const precomputeDone = await warmShortQueries(env.SEARCH_DB, env.GNAF_BUCKET, version, ctx);
 
-    // Warm all R2 shard caches (skips already-cached entries)
-    await warmShards(env.GNAF_BUCKET, version);
+    // Warm all R2 shard caches only after pre-computation is complete (subrequest budget)
+    if (precomputeDone) {
+      await warmShards(env.GNAF_BUCKET, version);
+    }
   },
 };
