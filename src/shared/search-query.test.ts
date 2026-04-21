@@ -289,14 +289,14 @@ describe("parseSearchQuery", () => {
   });
 
   describe("FTS5 query generation", () => {
-    it("generates prefix search on last token", () => {
+    it("generates quoted prefix search on last token", () => {
       const r = parseSearchQuery("murray")!;
-      expect(r.ftsQuery).toBe("MURRAY*");
+      expect(r.ftsQuery).toBe('"MURRAY"*');
     });
 
-    it("exact match on non-last tokens, prefix on last", () => {
+    it("exact match on non-last tokens, quoted prefix on last", () => {
       const r = parseSearchQuery("christmas murray")!;
-      expect(r.ftsQuery).toBe('"CHRISTMAS" AND MURRAY*');
+      expect(r.ftsQuery).toBe('"CHRISTMAS" AND "MURRAY"*');
     });
 
     it("resolves full form street type to exact match (last token)", () => {
@@ -305,40 +305,40 @@ describe("parseSearchQuery", () => {
       expect(r.ftsQuery).toBe('"MURRAY" AND ROAD');
     });
 
-    it("resolves abbreviation to exact full form + keeps original as prefix (last token)", () => {
+    it("resolves abbreviation to exact full form + keeps original as quoted prefix (last token)", () => {
       const r = parseSearchQuery("murray rd")!;
-      // RD → ROAD (exact), original RD* kept for prefix matching
-      expect(r.ftsQuery).toBe('"MURRAY" AND (ROAD OR RD*)');
+      // RD → ROAD (exact), original "RD"* kept for prefix matching
+      expect(r.ftsQuery).toBe('"MURRAY" AND (ROAD OR "RD"*)');
     });
 
     it("resolves informal abbreviation AVE (last token)", () => {
       const r = parseSearchQuery("murray ave")!;
-      // AVE → AVENUE (exact), original AVE* kept for prefix matching (e.g., AVALON)
-      expect(r.ftsQuery).toBe('"MURRAY" AND (AVENUE OR AVE*)');
+      // AVE → AVENUE (exact), original "AVE"* kept for prefix matching (e.g., AVALON)
+      expect(r.ftsQuery).toBe('"MURRAY" AND (AVENUE OR "AVE"*)');
     });
 
     it("resolves informal abbreviation CRES (last token)", () => {
       const r = parseSearchQuery("murray cres")!;
-      // CRES → CRESCENT (exact), original CRES* kept
-      expect(r.ftsQuery).toBe('"MURRAY" AND (CRESCENT OR CRES*)');
+      // CRES → CRESCENT (exact), original "CRES"* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (CRESCENT OR "CRES"*)');
     });
 
     it("resolves informal abbreviation BLVD (last token)", () => {
       const r = parseSearchQuery("murray blvd")!;
-      // BLVD → BOULEVARD (exact), original BLVD* kept
-      expect(r.ftsQuery).toBe('"MURRAY" AND (BOULEVARD OR BLVD*)');
+      // BLVD → BOULEVARD (exact), original "BLVD"* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (BOULEVARD OR "BLVD"*)');
     });
 
     it("partial full-form prefix matches naturally", () => {
-      // User types "ROA" — not a known abbreviation, stays as ROA* which matches ROAD in index
+      // User types "ROA" — not a known abbreviation, stays as "ROA"* which matches ROAD in index
       const r = parseSearchQuery("murray roa")!;
-      expect(r.ftsQuery).toBe('"MURRAY" AND ROA*');
+      expect(r.ftsQuery).toBe('"MURRAY" AND "ROA"*');
     });
 
     it("abbreviation prefix still matches locality names (av → AVALON)", () => {
-      // "AV" is a known abbreviation for AVENUE — exact AVENUE + prefix AV*
+      // "AV" is a known abbreviation for AVENUE — exact AVENUE + "AV"*
       const r = parseSearchQuery("av")!;
-      expect(r.ftsQuery).toContain("AV*");
+      expect(r.ftsQuery).toContain('"AV"*');
       expect(r.ftsQuery).toContain("AVENUE");
       expect(r.ftsQuery).not.toContain("AVENUE*");
     });
@@ -352,19 +352,42 @@ describe("parseSearchQuery", () => {
     it("resolves street suffix abbreviation N to full form NORTH (last token)", () => {
       const r = parseSearchQuery("murray rd n")!;
       expect(r.ftsQuery).toContain("NORTH");
-      expect(r.ftsQuery).toContain("N*");
+      expect(r.ftsQuery).toContain('"N"*');
     });
 
     it("resolves multi-word suffix NE to quoted NORTH EAST (last token)", () => {
       const r = parseSearchQuery("murray rd ne")!;
       expect(r.ftsQuery).toContain('"NORTH EAST"');
-      expect(r.ftsQuery).toContain("NE*");
+      expect(r.ftsQuery).toContain('"NE"*');
     });
 
     it("resolves suffix abbreviation in non-last position", () => {
       const r = parseSearchQuery("murray rd n sydney")!;
       expect(r.ftsQuery).toContain('"NORTH"');
       expect(r.ftsQuery).toContain('"N"');
+    });
+
+    it("quotes FTS5 keyword OR in prefix search", () => {
+      const r = parseSearchQuery("or")!;
+      // "OR" is an FTS5 operator — must be quoted to avoid syntax error
+      expect(r.ftsQuery).toBe('"OR"*');
+    });
+
+    it("quotes FTS5 keyword AND in prefix search", () => {
+      const r = parseSearchQuery("an")!;
+      // "AN" is not a keyword, but verify quoting works for all tokens
+      expect(r.ftsQuery).toBe('"AN"*');
+    });
+
+    it("quotes FTS5 keyword NOT in prefix search", () => {
+      const r = parseSearchQuery("not")!;
+      expect(r.ftsQuery).toBe('"NOT"*');
+    });
+
+    it("handles OR as non-last token (quoted exact match)", () => {
+      const r = parseSearchQuery("or street")!;
+      expect(r.ftsQuery).toContain('"OR"');
+      expect(r.ftsQuery).not.toMatch(/\bOR\b[^"*]/); // bare OR should not appear
     });
 
     it("numbers are excluded from FTS query", () => {
