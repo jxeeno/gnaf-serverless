@@ -12,7 +12,7 @@ import {
 import { queryOverlays } from "./pmtiles.js";
 import { executeSearch, entryToSla } from "./search.js";
 import type { StreetRow } from "./search.js";
-import { normalizeQuery, loadPrecomputedQuery, warmShortQueries, warmShards } from "./warmup.js";
+import { normalizeQuery, isPrecomputedQuery, loadPrecomputedQuery, warmShortQueries, warmShards } from "./warmup.js";
 
 type Bindings = {
   GNAF_BUCKET: R2Bucket;
@@ -109,9 +109,9 @@ app.get("/api/addresses/search", async (c) => {
   const limit = Math.min(parseInt(c.req.query("limit") ?? "10", 10), 50);
   const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
 
-  // For short queries (< 3 alphanumeric chars), serve from pre-computed R2 data
+  // For short queries, serve from pre-computed R2 data
   const normalized = normalizeQuery(q);
-  if (normalized.length >= 2 && normalized.length < 3) {
+  if (isPrecomputedQuery(normalized)) {
     const precomputed = await loadPrecomputedQuery(
       c.env.GNAF_BUCKET, gnafVersion, normalized, c.executionCtx
     );
@@ -423,6 +423,6 @@ export default {
     await warmShortQueries(env.SEARCH_DB, env.GNAF_BUCKET, version, ctx);
 
     // Warm all R2 shard caches (skips already-cached entries)
-    await warmShards(env.GNAF_BUCKET, version, ctx);
+    await warmShards(env.GNAF_BUCKET, version);
   },
 };

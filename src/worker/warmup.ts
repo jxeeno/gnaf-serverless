@@ -6,16 +6,42 @@ const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
 const QUERY_BATCH_SIZE = 20;
 
-/** Generate all 2-char alphanumeric combinations [a-z0-9] x [a-z0-9] */
+/**
+ * Generate all pre-computable short queries:
+ * - 2-char: all [a-z0-9] x [a-z0-9] = 1,296
+ * - 3-char: [0-9]{2}[a-z] only = 2,600 (e.g., "10k", "25s" — street number + first letter)
+ * Total: 3,896
+ */
 function generateShortQueries(): string[] {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const alphanumeric = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const alpha = "abcdefghijklmnopqrstuvwxyz";
+  const digits = "0123456789";
   const queries: string[] = [];
-  for (const a of chars) {
-    for (const b of chars) {
+
+  // All 2-char alphanumeric combinations
+  for (const a of alphanumeric) {
+    for (const b of alphanumeric) {
       queries.push(a + b);
     }
   }
+
+  // 3-char: two digits followed by one letter
+  for (const d1 of digits) {
+    for (const d2 of digits) {
+      for (const c of alpha) {
+        queries.push(d1 + d2 + c);
+      }
+    }
+  }
+
   return queries;
+}
+
+/** Check if a normalized query has a pre-computed result */
+export function isPrecomputedQuery(normalized: string): boolean {
+  if (normalized.length === 2) return true;
+  if (normalized.length === 3 && /^[0-9]{2}[a-z]$/.test(normalized)) return true;
+  return false;
 }
 
 /** Normalize a query string: trim, strip non-alphanumeric, lowercase */
