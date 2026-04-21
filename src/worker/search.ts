@@ -71,6 +71,172 @@ export function entryToSla(entry: StreetAddressEntry, street: StreetRow): string
 }
 
 /**
+ * Handle number-only queries (e.g., "5", "12") by finding popular streets
+ * whose address range includes the number, then fetching sample addresses.
+ */
+async function executeNumberOnlySearch(
+  num: number,
+  limit: number,
+  db: D1Database,
+  bucket: R2Bucket,
+  version: string,
+  ctx: ExecutionContext
+): Promise<SearchResponse> {
+  const dbSession = db.withSession();
+  const streetLimit = Math.max(30, limit * 3);
+
+  const searchResults = await dbSession
+    .prepare(
+      `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
+              s.street_name, s.street_type, s.street_suffix, s.locality_name,
+              s.state, s.postcode, s.address_count, s.digit_shards,
+              s.num_min, s.num_max, s.flat_min, s.flat_max
+       FROM streets AS s
+       WHERE s.num_min IS NOT NULL AND s.num_max IS NOT NULL
+         AND ?1 BETWEEN s.num_min AND s.num_max
+       ORDER BY s.address_count DESC
+       LIMIT ?2`
+    )
+    .bind(num, streetLimit)
+    .all<StreetRow>();
+
+  if (!searchResults.results.length) {
+    return {
+      body: { streets: [], addresses: [] },
+      meta: {
+        d1RowsRead: searchResults.meta?.rows_read ?? 0,
+        d1Duration: searchResults.meta?.duration ?? 0,
+        r2Fetches: 0,
+        r2Duration: 0,
+      },
+    };
+  }
+
+  const matchedStreets = searchResults.results;
+  const numStr = String(num);
+
+  const streets: StreetResult[] = matchedStreets.slice(0, limit).map((r) => ({
+    streetId: r.id,
+    display: r.display,
+    highlight: [],
+    streetName: r.street_name,
+    locality: r.locality_name,
+    state: r.state,
+    postcode: r.postcode,
+    addressCount: r.address_count,
+  }));
+
+  // Fetch the relevant digit sub-shard (or base shard) for each street
+  const shardFetches = new Map<string, string[]>();
+  function addFetch(prefix: string, key: string) {
+    if (!shardFetches.has(prefix)) shardFetches.set(prefix, []);
+    shardFetches.get(prefix)!.push(key);
+  }
+
+  const digit = numStr.charAt(0);
+  for (const street of matchedStreets) {
+    if (street.digit_shards) {
+      const digitMap: Record<string, string> = JSON.parse(street.digit_shards);
+      const subPrefix = digitMap[digit];
+      if (subPrefix) {
+        addFetch(subPrefix, `${street.street_key}|${digit}`);
+      }
+    } else {
+      addFetch(street.shard_prefix, street.street_key);
+    }
+  }
+
+  const fetchEntries = Array.from(shardFetches.entries());
+  const s3Start = Date.now();
+  const shardResults = await Promise.all(
+    fetchEntries.map(([prefix]) => fetchStreetShard(bucket, version, prefix, ctx))
+  );
+  const s3Duration = Date.now() - s3Start;
+
+  const streetByKey = new Map(matchedStreets.map((s) => [s.street_key, s]));
+
+  interface ScoredAddr {
+    pid: string;
+    sla: string;
+    streetId: number;
+    score: number;
+  }
+
+  const scored: ScoredAddr[] = [];
+  for (let i = 0; i < fetchEntries.length; i++) {
+    const [, shardKeys] = fetchEntries[i];
+    const shardData = shardResults[i];
+    for (const shardKey of shardKeys) {
+      const entries = shardData[shardKey];
+      if (!entries) continue;
+      const pipeIdx = shardKey.lastIndexOf("|");
+      const baseKey = pipeIdx > 0 && shardKey.length - pipeIdx <= 2
+        ? shardKey.substring(0, pipeIdx) : shardKey;
+      const street = streetByKey.get(baseKey);
+      if (!street) continue;
+      for (const entry of entries) {
+        // Match: street number equals the queried number (or within range)
+        if (entry.n == null) continue;
+        const exactMatch = entry.n === num;
+        const rangeMatch = entry.n2 != null && num >= entry.n && num <= entry.n2;
+        if (!exactMatch && !rangeMatch) continue;
+        // Prefer bare addresses (no flat/level)
+        const score = exactMatch
+          ? (entry.f == null && entry.l == null ? 100 : 90)
+          : 50;
+        scored.push({
+          pid: entry.p,
+          sla: entryToSla(entry, street),
+          streetId: street.id,
+          score,
+        });
+      }
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Diversify: 1 per street first, then backfill
+  const seenStreets = new Set<number>();
+  const firstPass: ScoredAddr[] = [];
+  const remainder: ScoredAddr[] = [];
+  for (const addr of scored) {
+    if (!seenStreets.has(addr.streetId)) {
+      seenStreets.add(addr.streetId);
+      firstPass.push(addr);
+    } else {
+      remainder.push(addr);
+    }
+  }
+  const results = firstPass.slice(0, limit);
+  if (results.length < limit) {
+    results.push(...remainder.slice(0, limit - results.length));
+  }
+
+  const addresses: AddressResult[] = results.map((a) => ({
+    pid: a.pid,
+    sla: a.sla,
+    highlight: computeHighlightRanges(a.sla, {
+      streetName: "",
+      localityName: "",
+      state: "",
+      displayPrefix: a.sla.split(",")[0] ?? "",
+    }, String(num)),
+    streetId: a.streetId,
+  }));
+
+  return {
+    body: { streets, addresses },
+    meta: {
+      d1RowsRead: searchResults.meta?.rows_read ?? 0,
+      d1Duration: searchResults.meta?.duration ?? 0,
+      r2Fetches: fetchEntries.length,
+      r2Duration: s3Duration,
+    },
+  };
+}
+
+/**
  * Execute a search query against D1 + R2 and return structured results.
  * Returns null if the query doesn't parse (no text tokens).
  */
@@ -83,7 +249,15 @@ export async function executeSearch(
   ctx: ExecutionContext
 ): Promise<SearchResponse | null> {
   const parsed = parseSearchQuery(q);
-  if (!parsed) return null;
+
+  // Number-only queries (e.g., "5", "12") have no text tokens so parseSearchQuery
+  // returns null. Handle them by querying streets whose address range includes the
+  // number, ordered by popularity (address_count), to show representative results.
+  if (!parsed) {
+    const numMatch = q.trim().match(/^(\d+)$/);
+    if (!numMatch) return null;
+    return executeNumberOnlySearch(parseInt(numMatch[1], 10), limit, db, bucket, version, ctx);
+  }
 
   const { numTokens, ftsQuery, streetHint, flatHint, levelHint } = parsed;
 

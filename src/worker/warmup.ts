@@ -6,7 +6,7 @@ const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
 const QUERY_BATCH_SIZE = 20;
 /** Max queries to process per cron invocation (avoids subrequest + CPU limits) */
-const QUERIES_PER_RUN = 20;
+const QUERIES_PER_RUN = 40;
 
 /**
  * Generate all pre-computable short queries:
