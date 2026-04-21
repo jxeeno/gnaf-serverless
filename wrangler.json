@@ -12,6 +12,9 @@
   "placement": {
     "mode": "smart"
   },
+  "limits": {
+    "cpu_ms": 30000
+  },
   "upload_source_maps": true,
   "build": {
     "watch_dir": [
