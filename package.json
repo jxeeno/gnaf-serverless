@@ -61,6 +61,7 @@
 		"pipeline:shard": "tsx scripts/pipeline/shard.ts",
 		"pipeline:upload": "tsx scripts/pipeline/upload.ts",
 		"pipeline:search-index": "tsx scripts/pipeline/search-index.ts",
+		"pipeline:precompute": "tsx scripts/pipeline/precompute.ts",
 		"pipeline:run": "tsx scripts/pipeline/run.ts",
 		"test": "vitest run --config vitest.config.ts",
 		"test:watch": "vitest --config vitest.config.ts"

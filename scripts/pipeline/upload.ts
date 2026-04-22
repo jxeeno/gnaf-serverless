@@ -106,13 +106,15 @@ export async function upload(): Promise<void> {
 
   // Upload address, lot/DP, and street shards in parallel
   const streetShardsDir = path.join(SHARDS_DIR, "streets");
-  console.log("Uploading address, lot/DP, and street shards...");
-  const [addressCount, lotdpCount, streetCount] = await Promise.all([
+  const precomputedDir = path.join(SHARDS_DIR, "precomputed");
+  console.log("Uploading address, lot/DP, street shards, and precomputed queries...");
+  const [addressCount, lotdpCount, streetCount, precomputedCount] = await Promise.all([
     uploadDirectory(client, ADDRESS_SHARDS_DIR, `gnaf/${version}/addresses`, "application/json", "gzip"),
     uploadDirectory(client, LOTDP_SHARDS_DIR, `gnaf/${version}/lotdp`, "application/json", "gzip"),
     uploadDirectory(client, streetShardsDir, `gnaf/${version}/streets`, "application/json", "gzip"),
+    uploadDirectory(client, precomputedDir, `gnaf/${version}/precomputed`, "application/json"),
   ]);
-  console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street shards`);
+  console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street, ${precomputedCount} precomputed shards`);
 
   // Upload metadata
   console.log("Uploading metadata...");

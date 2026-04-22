@@ -96,6 +96,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Enable D1 read replication
+        run: |
+          curl -sf -X PATCH \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.CLOUDFLARE_ACCOUNT_ID }}/d1/database/${{ steps.d1.outputs.db_id }}" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"read_replication":{"mode":"auto"}}'
+          echo "Read replication enabled for ${{ steps.d1.outputs.db_name }}"
+
       - name: Update wrangler.json with new D1 database and GNAF version
         run: |
           jq --arg id "${{ steps.d1.outputs.db_id }}" \

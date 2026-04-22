@@ -201,6 +201,9 @@ jobs:
       - name: Generate search index
         run: npm run pipeline:search-index
 
+      - name: Pre-compute short query results
+        run: npm run pipeline:precompute
+
       - name: Upload search index artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -208,6 +211,7 @@ jobs:
           path: |
             data/shards/streets/
             data/shards/search-index/
+            data/shards/precomputed/
           retention-days: 1
           compression-level: 1
 
@@ -277,6 +281,7 @@ jobs:
           lotdp/          # Lot/DP index shards (gzipped JSON, mapping lot/DP -> GNAF PIDs)
           streets/        # Street shards (gzipped JSON, keyed by street key)
           search-index/   # D1 SQL chunks for street search index
+          precomputed/    # Pre-computed short query results (JSON)
           metadata.json   # Version, counts, and configuration
           \`\`\`
 

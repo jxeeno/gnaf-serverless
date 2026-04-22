@@ -82,7 +82,7 @@ function elapsed(startMs: number): string {
 
 const INSERT_BATCH_SIZE = 200;
 
-interface StreetEntry {
+export interface StreetEntry {
   id: number;
   display: string;
   display_search: string;
@@ -501,6 +501,12 @@ export async function generateSearchIndex(): Promise<void> {
   console.log(
     `Search index SQL written to ${SEARCH_INDEX_DIR}/001.sql (${totalMb} MB, ${streets.length} streets)`
   );
+
+  // Export streets as JSON for the precompute pipeline step
+  const streetsJsonPath = path.join(SHARDS_DIR, "streets.json");
+  await fsp.writeFile(streetsJsonPath, JSON.stringify(streets));
+  console.log(`Streets JSON written to ${streetsJsonPath} (${streets.length} entries)`);
+
   console.log(`Search index generation complete (${elapsed(t0)})`);
 
   conn.disconnectSync();
