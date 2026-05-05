@@ -66,11 +66,20 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
     return tokenIdx < lastTextIdx;
   });
 
-  // Strip flat/level type keywords from text tokens for FTS5
-  const hasUnitKeyword = rawTextTokens.some((t) => FLAT_LEVEL_KEYWORDS.has(t));
+  // Strip flat/level type keywords from text tokens for FTS5.
+  // But keep them when stripping would leave no text tokens AND the query looks like
+  // a prefix search — e.g., "1 B" where B is BASEMENT but the user is searching for
+  // streets starting with B at address 1. Multi-keyword combos like "unit apartment"
+  // are not restored (they're not useful prefix searches).
   let textTokens = rawTextTokens.filter(
     (t) => !FLAT_LEVEL_KEYWORDS.has(t)
   );
+  const keywordsWereStripped = textTokens.length < rawTextTokens.length;
+  if (textTokens.length === 0 && rawTextTokens.length > 0 &&
+      (numTokens.length > 0 || rawTextTokens.length === 1)) {
+    textTokens = rawTextTokens;
+  }
+  const hasUnitKeyword = keywordsWereStripped && textTokens.length < rawTextTokens.length;
 
   // Detect alpha/alphanumeric flat identifier.
   // Triggers when:

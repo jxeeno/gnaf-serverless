@@ -456,6 +456,7 @@ export async function precompute(): Promise<void> {
   const queries = generateShortQueries();
   console.log(`Pre-computing ${queries.length} short queries...`);
 
+  let emptyCount = 0;
   for (let i = 0; i < queries.length; i++) {
     const q = queries[i];
     const result = executeSearch(q);
@@ -463,12 +464,21 @@ export async function precompute(): Promise<void> {
       path.join(PRECOMPUTED_DIR, `${q}.json`),
       JSON.stringify(result)
     );
+    if (result.streets.length === 0 && result.addresses.length === 0) {
+      emptyCount++;
+      if (emptyCount <= 20) {
+        console.warn(`  Empty result for query: "${q}"`);
+      }
+    }
     if ((i + 1) % 500 === 0) {
       console.log(`  ${i + 1}/${queries.length} (${elapsed(t0)})...`);
     }
   }
+  if (emptyCount > 0) {
+    console.warn(`  ${emptyCount} queries produced empty results`);
+  }
 
-  // Write sentinel
+  // Write sentinel so cron skips regeneration
   writeFileSync(path.join(PRECOMPUTED_DIR, ".done"), "");
   console.log(
     `Pre-computed ${queries.length} queries to ${PRECOMPUTED_DIR} (${elapsed(t0)})`
