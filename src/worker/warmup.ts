@@ -1,6 +1,4 @@
 import { fetchAndDecompress } from "./r2.js";
-import { executeSearch } from "./search.js";
-import { generateShortQueries } from "../shared/precomputed-queries.js";
 
 export { isPrecomputedQuery, normalizeQuery } from "../shared/precomputed-queries.js";
 
@@ -8,9 +6,6 @@ export { isPrecomputedQuery, normalizeQuery } from "../shared/precomputed-querie
 const SHARD_TYPES = ["streets"] as const;
 const TOTAL_PREFIXES = 4096;
 const SHARD_BATCH_SIZE = 128;
-const QUERY_BATCH_SIZE = 20;
-/** Max queries to process per cron invocation (avoids subrequest + CPU limits) */
-const QUERIES_PER_RUN = 60;
 
 /** Load a single pre-computed short query result from R2 (with Cache API caching) */
 export async function loadPrecomputedQuery(
@@ -44,83 +39,17 @@ export async function loadPrecomputedQuery(
   return data;
 }
 
-/**
- * Pre-compute short query results and store individually in R2.
- * Processes up to QUERIES_PER_RUN queries per invocation to stay within CPU limits.
- * Uses a progress file to resume across cron runs. Skips if sentinel exists.
- */
-export async function warmShortQueries(
-  db: D1Database,
+/** Store a pre-computed short query result in R2 (lazy cache on first miss) */
+export async function storePrecomputedQuery(
   bucket: R2Bucket,
   version: string,
-  ctx: ExecutionContext
-): Promise<boolean> {
-  // Check sentinel file — skip if already generated for this version
-  const sentinelKey = `gnaf/${version}/precomputed/.done`;
-  const existing = await bucket.head(sentinelKey);
-  if (existing) return true;
-
-  const queries = generateShortQueries();
-
-  // Read progress file to resume from where we left off
-  const progressKey = `gnaf/${version}/precomputed/.progress`;
-  const progressObj = await bucket.get(progressKey);
-  let startIndex = 0;
-  if (progressObj) {
-    startIndex = parseInt(await progressObj.text(), 10) || 0;
-  }
-
-  if (startIndex >= queries.length) {
-    // All queries done — write sentinel and clean up progress file
-    await bucket.put(sentinelKey, "", {
-      httpMetadata: { contentType: "text/plain" },
-    });
-    await bucket.delete(progressKey);
-    console.log(`Pre-computed all ${queries.length} short query results`);
-    return true;
-  }
-
-  const endIndex = Math.min(startIndex + QUERIES_PER_RUN, queries.length);
-  console.log(`Pre-computing queries ${startIndex}–${endIndex - 1} of ${queries.length}...`);
-
-  // Process this chunk in batches
-  for (let i = startIndex; i < endIndex; i += QUERY_BATCH_SIZE) {
-    const batch = queries.slice(i, Math.min(i + QUERY_BATCH_SIZE, endIndex));
-    const batchResults = await Promise.all(
-      batch.map(async (q) => {
-        const result = await executeSearch(q, 50, db, bucket, version, ctx);
-        return { q, body: result?.body ?? { streets: [], addresses: [] } };
-      })
-    );
-
-    // Upload each result to R2
-    await Promise.all(
-      batchResults.map(({ q, body }) =>
-        bucket.put(
-          `gnaf/${version}/precomputed/${q}.json`,
-          JSON.stringify(body),
-          { httpMetadata: { contentType: "application/json" } }
-        )
-      )
-    );
-  }
-
-  if (endIndex >= queries.length) {
-    // Finished — write sentinel and clean up progress file
-    await bucket.put(sentinelKey, "", {
-      httpMetadata: { contentType: "text/plain" },
-    });
-    await bucket.delete(progressKey);
-    console.log(`Pre-computed all ${queries.length} short query results`);
-    return true;
-  }
-
-  // Save progress for next cron run
-  await bucket.put(progressKey, String(endIndex), {
-    httpMetadata: { contentType: "text/plain" },
+  normalizedQuery: string,
+  result: { streets: unknown[]; addresses: unknown[] },
+): Promise<void> {
+  const r2Key = `gnaf/${version}/precomputed/${normalizedQuery}.json`;
+  await bucket.put(r2Key, JSON.stringify(result), {
+    httpMetadata: { contentType: "application/json" },
   });
-  console.log(`Progress saved at ${endIndex}/${queries.length}`);
-  return false;
 }
 
 /**

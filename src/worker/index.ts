@@ -12,7 +12,7 @@ import {
 import { queryOverlays } from "./pmtiles.js";
 import { executeSearch, entryToSla } from "./search.js";
 import type { StreetRow } from "./search.js";
-import { normalizeQuery, isPrecomputedQuery, loadPrecomputedQuery, warmShortQueries, warmShards } from "./warmup.js";
+import { normalizeQuery, isPrecomputedQuery, loadPrecomputedQuery, storePrecomputedQuery, warmShards } from "./warmup.js";
 
 type Bindings = {
   GNAF_BUCKET: R2Bucket;
@@ -111,7 +111,8 @@ app.get("/api/addresses/search", async (c) => {
 
   // For short queries, serve from pre-computed R2 data
   const normalized = normalizeQuery(q);
-  if (isPrecomputedQuery(normalized)) {
+  const isPrecomputed = isPrecomputedQuery(normalized);
+  if (isPrecomputed) {
     const precomputed = await loadPrecomputedQuery(
       c.env.GNAF_BUCKET, gnafVersion, normalized, c.executionCtx
     );
@@ -154,6 +155,13 @@ app.get("/api/addresses/search", async (c) => {
     );
     c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
+  }
+
+  // Lazily store precomputed result in R2 for future requests
+  if (isPrecomputed) {
+    c.executionCtx.waitUntil(
+      storePrecomputedQuery(c.env.GNAF_BUCKET, gnafVersion, normalized, result.body)
+    );
   }
 
   const response = c.json(result.body, 200, {
@@ -430,12 +438,7 @@ export default {
     // D1 keepalive — prevents cold connection on next user request
     await env.SEARCH_DB.prepare("SELECT 1").first();
 
-    // Pre-compute short query results (once per version, stored in R2)
-    const precomputeDone = await warmShortQueries(env.SEARCH_DB, env.GNAF_BUCKET, version, ctx);
-
-    // Warm all R2 shard caches only after pre-computation is complete (subrequest budget)
-    if (precomputeDone) {
-      await warmShards(env.GNAF_BUCKET, version);
-    }
+    // Warm all R2 street shard caches
+    await warmShards(env.GNAF_BUCKET, version);
   },
 };

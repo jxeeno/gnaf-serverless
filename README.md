@@ -282,7 +282,14 @@ Pre-computed query patterns (3,672 total):
 | 1 digit + space + letter | `1 m`, `5 k` | 260 |
 | 2 digits + space + letter | `12 k`, `25 s` | 2,600 |
 
-A `.done` sentinel file is written alongside the precomputed results. The cron trigger checks for this sentinel and skips runtime pre-computation if it exists.
+### How short query serving works
+
+When a search request arrives with a short query (e.g. `?q=sy`):
+
+1. The query is normalized: trimmed, non-alphanumeric characters stripped (spaces preserved), lowercased
+2. If the normalized query matches a pre-computed pattern, the worker loads the result from R2 (with Cache API caching)
+3. The response is returned with an `X-Precomputed: true` header
+4. If no pre-computed result exists, the query falls through to the normal D1 + R2 search path and the result is lazily stored in R2 for future requests
 
 ## Cache Warming
 
@@ -295,17 +302,6 @@ The `scheduled` handler in the worker performs two tasks:
 1. **D1 keepalive** — executes `SELECT 1` to prevent cold D1 connections on the next user request.
 
 2. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache.
-
-If the `.done` sentinel is missing (e.g. deploying from an older release without pre-built data), the cron trigger falls back to runtime pre-computation — chunking queries across invocations (60 per run) to stay within Workers subrequest and CPU limits.
-
-### How short query serving works
-
-When a search request arrives with a short query (e.g. `?q=sy`):
-
-1. The query is normalized: trimmed, non-alphanumeric characters stripped (spaces preserved), lowercased
-2. If the normalized query matches a pre-computed pattern, the worker loads the result from R2 (with Cache API caching)
-3. The response is returned with an `X-Precomputed: true` header
-4. If no pre-computed result exists, the query falls through to the normal D1 + R2 search path (or returns empty for 1-char queries)
 
 ### Configuration
 
@@ -321,8 +317,6 @@ The cron trigger is configured in `wrangler.json`:
 
 ```
 gnaf/{version}/precomputed/
-├── .done              # Sentinel: all queries pre-computed for this version
-├── .progress          # Current index (deleted on completion)
 ├── a.json             # Pre-computed result for query "a"
 ├── sy.json            # Pre-computed result for query "sy"
 ├── 1 m.json           # Pre-computed result for query "1 m"
