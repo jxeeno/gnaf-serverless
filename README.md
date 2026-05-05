@@ -155,6 +155,7 @@ npm run pipeline:download      # Download GNAF ZIP from data.gov.au
 npm run pipeline:import        # Import PSVs into DuckDB and denormalize
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
+npm run pipeline:precompute    # Pre-compute short query results (requires search-index)
 npm run pipeline:upload        # Upload shards to R2
 ```
 
@@ -268,30 +269,34 @@ npm run deploy
 
 The worker uses a native R2 binding (`GNAF_BUCKET`) configured in `wrangler.json` — no secrets are needed for data access.
 
+## Pre-computed Short Queries
+
+Common short queries are pre-computed at build time during the GitHub Actions pipeline (`npm run pipeline:precompute`). The results are stored as individual JSON files in the release archive and uploaded to R2 (`gnaf/{version}/precomputed/{query}.json`). These are served directly for matching requests, bypassing D1 + R2 shard lookups entirely.
+
+Pre-computed query patterns (3,672 total):
+| Pattern | Example | Count |
+|---------|---------|-------|
+| 1-char letter or digit | `a`, `5` | 36 |
+| 2-char all letters | `sy`, `ke` | 676 |
+| 2-char all digits | `12`, `05` | 100 |
+| 1 digit + space + letter | `1 m`, `5 k` | 260 |
+| 2 digits + space + letter | `12 k`, `25 s` | 2,600 |
+
+A `.done` sentinel file is written alongside the precomputed results. The cron trigger checks for this sentinel and skips runtime pre-computation if it exists.
+
 ## Cache Warming
 
 A Cloudflare Cron Trigger runs every minute to keep caches warm and reduce cold-start latency for search requests.
 
 ### What it does
 
-The `scheduled` handler in the worker performs three tasks:
+The `scheduled` handler in the worker performs two tasks:
 
 1. **D1 keepalive** — executes `SELECT 1` to prevent cold D1 connections on the next user request.
 
-2. **Pre-compute short query results** — runs `executeSearch` for common short queries and stores each result as an individual JSON file in R2 (`gnaf/{version}/precomputed/{query}.json`). These are served directly for matching requests, bypassing D1 + R2 shard lookups entirely.
+2. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache.
 
-   Pre-computed query patterns (3,672 total):
-   | Pattern | Example | Count |
-   |---------|---------|-------|
-   | 1-char letter or digit | `a`, `5` | 36 |
-   | 2-char all letters | `sy`, `ke` | 676 |
-   | 2-char all digits | `12`, `05` | 100 |
-   | 1 digit + space + letter | `1 m`, `5 k` | 260 |
-   | 2 digits + space + letter | `12 k`, `25 s` | 2,600 |
-
-   Pre-computation is chunked across cron invocations (40 queries per run) to stay within Workers subrequest and CPU limits. Progress is tracked via a `.progress` file in R2, and a `.done` sentinel marks completion. Full pre-computation takes ~1.5 hours on first run for a new GNAF version.
-
-3. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache. Only runs after pre-computation is complete.
+If the `.done` sentinel is missing (e.g. deploying from an older release without pre-built data), the cron trigger falls back to runtime pre-computation — chunking queries across invocations (60 per run) to stay within Workers subrequest and CPU limits.
 
 ### How short query serving works
 
