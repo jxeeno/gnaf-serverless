@@ -129,6 +129,13 @@ export interface ShardMetadata {
   totalShards: number;
   totalLotDpShards: number;
   datum: string;
+  gnafReleaseName?: string;
+}
+
+/** Result of a PMTiles point-in-polygon overlay query */
+export interface OverlayResult {
+  label: string;
+  features: Record<string, string | number | boolean>[];
 }
 
 /**
@@ -242,4 +249,5 @@ export interface AddressResponse {
       type: { code: string; name: string };
     }>;
   };
+  overlays?: Record<string, OverlayResult>;
 }

@@ -12,6 +12,7 @@ export const Route = createFileRoute("/")({
 interface SearchResult {
   streetId: number;
   display: string;
+  highlight?: [number, number][];
   streetName: string;
   locality: string;
   state: string;
@@ -22,6 +23,7 @@ interface SearchResult {
 interface SearchAddressResult {
   pid: string;
   sla: string;
+  highlight?: [number, number][];
   streetId: number;
 }
 
@@ -60,9 +62,9 @@ interface RequestLogEntry {
   stale: boolean;
 }
 
-/** Highlight matching portions of text */
-function HighlightMatch({ text, query }: { text: string; query: string }) {
-  if (!query.trim()) return <>{text}</>;
+/** Compute highlight ranges client-side from a query (for results without server-provided ranges) */
+function computeHighlight(text: string, query: string): [number, number][] {
+  if (!query.trim()) return [];
 
   const tokens = query.toUpperCase().split(/[\s,/]+/).filter(Boolean);
   const upperText = text.toUpperCase();
@@ -76,7 +78,7 @@ function HighlightMatch({ text, query }: { text: string; query: string }) {
     }
   }
 
-  if (ranges.length === 0) return <>{text}</>;
+  if (ranges.length === 0) return [];
 
   ranges.sort((a, b) => a[0] - b[0]);
   const merged: [number, number][] = [ranges[0]];
@@ -88,10 +90,16 @@ function HighlightMatch({ text, query }: { text: string; query: string }) {
       merged.push(ranges[i]);
     }
   }
+  return merged;
+}
+
+/** Render text with server-provided highlight ranges */
+function HighlightMatch({ text, highlight }: { text: string; highlight?: [number, number][] }) {
+  if (!highlight || highlight.length === 0) return <>{text}</>;
 
   const parts: React.ReactElement[] = [];
   let prev = 0;
-  for (const [start, end] of merged) {
+  for (const [start, end] of highlight) {
     if (prev < start) {
       parts.push(<span key={prev}>{text.slice(prev, start)}</span>);
     }
@@ -163,7 +171,7 @@ function IndexPage() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setSearchResults([]);
       setSearchAddresses([]);
       setSearchMeta(null);
@@ -579,7 +587,7 @@ function IndexPage() {
                         <Store className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         <div className="min-w-0 flex-1">
                           <span className="text-sm truncate block">
-                            <HighlightMatch text={place.name} query={query} />
+                            <HighlightMatch text={place.name} highlight={computeHighlight(place.name, query)} />
                           </span>
                           <span className="text-xs text-muted-foreground truncate block">
                             {[place.category, place.display.split(", ").slice(1).join(", ")].filter(Boolean).join(" \u00b7 ")}
@@ -614,7 +622,7 @@ function IndexPage() {
                         >
                           <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                           <span className="text-sm truncate">
-                            <HighlightMatch text={addr.sla} query={query} />
+                            <HighlightMatch text={addr.sla} highlight={addr.highlight} />
                           </span>
                         </Link>
                       );
@@ -649,7 +657,7 @@ function IndexPage() {
                             <span className="text-sm truncate">
                               <HighlightMatch
                                 text={result.display}
-                                query={query}
+                                highlight={result.highlight}
                               />
                             </span>
                           </div>

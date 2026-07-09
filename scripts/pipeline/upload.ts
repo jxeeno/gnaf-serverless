@@ -71,7 +71,7 @@ async function uploadDirectory(
   }
 
   let uploaded = 0;
-  const maxConcurrency = 10;
+  const maxConcurrency = 20;
   const executing = new Set<Promise<void>>();
 
   for (const entry of entries) {
@@ -104,39 +104,17 @@ export async function upload(): Promise<void> {
   console.log(`Uploading GNAF ${version} to S3...`);
   const client = createS3Client();
 
-  // Upload address shards
-  console.log("Uploading address shards...");
-  const addressCount = await uploadDirectory(
-    client,
-    ADDRESS_SHARDS_DIR,
-    `gnaf/${version}/addresses`,
-    "application/json",
-    "gzip"
-  );
-  console.log(`  Uploaded ${addressCount} address shards`);
-
-  // Upload lot/DP shards
-  console.log("Uploading lot/DP shards...");
-  const lotdpCount = await uploadDirectory(
-    client,
-    LOTDP_SHARDS_DIR,
-    `gnaf/${version}/lotdp`,
-    "application/json",
-    "gzip"
-  );
-  console.log(`  Uploaded ${lotdpCount} lot/DP shards`);
-
-  // Upload street shards (for search/autocomplete)
+  // Upload address, lot/DP, and street shards in parallel
   const streetShardsDir = path.join(SHARDS_DIR, "streets");
-  console.log("Uploading street shards...");
-  const streetCount = await uploadDirectory(
-    client,
-    streetShardsDir,
-    `gnaf/${version}/streets`,
-    "application/json",
-    "gzip"
-  );
-  console.log(`  Uploaded ${streetCount} street shards`);
+  const precomputedDir = path.join(SHARDS_DIR, "precomputed");
+  console.log("Uploading address, lot/DP, street shards, and precomputed queries...");
+  const [addressCount, lotdpCount, streetCount, precomputedCount] = await Promise.all([
+    uploadDirectory(client, ADDRESS_SHARDS_DIR, `gnaf/${version}/addresses`, "application/json", "gzip"),
+    uploadDirectory(client, LOTDP_SHARDS_DIR, `gnaf/${version}/lotdp`, "application/json", "gzip"),
+    uploadDirectory(client, streetShardsDir, `gnaf/${version}/streets`, "application/json", "gzip"),
+    uploadDirectory(client, precomputedDir, `gnaf/${version}/precomputed`, "application/json"),
+  ]);
+  console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street, ${precomputedCount} precomputed shards`);
 
   // Upload metadata
   console.log("Uploading metadata...");

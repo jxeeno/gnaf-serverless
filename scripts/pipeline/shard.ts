@@ -9,6 +9,7 @@ import {
   ADDRESS_SHARDS_DIR,
   LOTDP_SHARDS_DIR,
   SHARD_PREFIX_LENGTH,
+  SHARD_PARTITION,
   DATUM,
 } from "./config.js";
 
@@ -226,7 +227,13 @@ export async function shard(): Promise<void> {
     `SELECT DISTINCT _addr_shard FROM addresses ORDER BY _addr_shard`
   );
   const addrPrefixRows = await readAllRows(addrPrefixResult);
-  const addrPrefixes = addrPrefixRows.map((r) => r._addr_shard as string);
+  const allAddrPrefixes = addrPrefixRows.map((r) => r._addr_shard as string);
+  const addrPrefixes = SHARD_PARTITION
+    ? allAddrPrefixes.filter((p) => p.startsWith(SHARD_PARTITION))
+    : allAddrPrefixes;
+  if (SHARD_PARTITION) {
+    console.log(`Partition "${SHARD_PARTITION}": ${addrPrefixes.length}/${allAddrPrefixes.length} prefixes`);
+  }
   console.log(`Writing address shards (${addrPrefixes.length} non-empty prefixes)...`);
 
   let addressShardsWritten = 0;
@@ -274,10 +281,13 @@ export async function shard(): Promise<void> {
 
   // Step 3: Write lot/DP shards — single ordered query with streaming
   console.log("Streaming lot/DP shards...");
+  const lotdpWhere = SHARD_PARTITION
+    ? `WHERE _lotdp_shard IS NOT NULL AND _lotdp_shard LIKE '${SHARD_PARTITION}%'`
+    : `WHERE _lotdp_shard IS NOT NULL`;
   const lotdpResult = await conn.run(`
     SELECT gnaf_pid, legal_parcel_id, _lotdp_shard
     FROM addresses
-    WHERE _lotdp_shard IS NOT NULL
+    ${lotdpWhere}
     ORDER BY _lotdp_shard
   `);
 
@@ -327,22 +337,36 @@ export async function shard(): Promise<void> {
   console.log(`  ${lotdpShardsWritten} lot/DP shards written (${lotdpRowsProcessed.toLocaleString()} rows, ${elapsed(t0)})`);
 
   // Write metadata
-  const now = new Date();
-  const version = `v${now.toISOString().slice(0, 10).replace(/-/g, "")}-${DATUM.toLowerCase()}`;
-  const metadata: ShardMetadata = {
-    version,
-    date: now.toISOString(),
-    shardPrefixLength: SHARD_PREFIX_LENGTH,
-    totalAddresses,
-    totalShards: addressShardsWritten,
-    totalLotDpShards: lotdpShardsWritten,
-    datum: DATUM,
-  };
-  await fsp.writeFile(
-    path.join(SHARDS_DIR, "metadata.json"),
-    JSON.stringify(metadata, null, 2)
-  );
-  console.log(`Metadata written: ${JSON.stringify(metadata)}`);
+  if (SHARD_PARTITION) {
+    // Partitioned mode: write partial counts for this partition
+    const partialMeta = {
+      totalAddresses,
+      totalShards: addressShardsWritten,
+      totalLotDpShards: lotdpShardsWritten,
+    };
+    await fsp.writeFile(
+      path.join(SHARDS_DIR, `_partial_meta_${SHARD_PARTITION}.json`),
+      JSON.stringify(partialMeta)
+    );
+    console.log(`Partial metadata written for partition "${SHARD_PARTITION}": ${JSON.stringify(partialMeta)}`);
+  } else {
+    const now = new Date();
+    const version = `v${now.toISOString().slice(0, 10).replace(/-/g, "")}-${DATUM.toLowerCase()}`;
+    const metadata: ShardMetadata = {
+      version,
+      date: now.toISOString(),
+      shardPrefixLength: SHARD_PREFIX_LENGTH,
+      totalAddresses,
+      totalShards: addressShardsWritten,
+      totalLotDpShards: lotdpShardsWritten,
+      datum: DATUM,
+    };
+    await fsp.writeFile(
+      path.join(SHARDS_DIR, "metadata.json"),
+      JSON.stringify(metadata, null, 2)
+    );
+    console.log(`Metadata written: ${JSON.stringify(metadata)}`);
+  }
   console.log(`Shard generation complete (${elapsed(t0)})`);
 
   conn.disconnectSync();

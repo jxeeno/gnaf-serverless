@@ -155,33 +155,34 @@ npm run pipeline:download      # Download GNAF ZIP from data.gov.au
 npm run pipeline:import        # Import PSVs into DuckDB and denormalize
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
+npm run pipeline:precompute    # Pre-compute short query results (requires search-index)
 npm run pipeline:upload        # Upload shards to R2
 ```
 
 ### Loading the Search Index
 
-The search index is split into chunk files for reliable D1 import:
+The search index is loaded into D1 automatically by the [Deploy workflow](.github/workflows/deploy-gnaf.yml), which creates a fresh D1 database per release and updates `wrangler.json` with the new database ID.
+
+For local development:
 
 ```bash
-# Local
 for f in data/shards/search-index/*.sql; do
   npx wrangler d1 execute gnaf-search --local --file="$f"
-done
-
-# Remote
-for f in data/shards/search-index/*.sql; do
-  npx wrangler d1 execute gnaf-search --remote --file="$f"
 done
 ```
 
 ## Using Pre-built Data
 
-Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index. You can skip the pipeline and upload directly.
+Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index.
+
+The [Deploy workflow](.github/workflows/deploy-gnaf.yml) runs automatically on each release — it uploads shards to R2, creates a new D1 database, and updates `wrangler.json`. You can also re-trigger it manually from the Actions tab.
+
+To deploy manually instead:
 
 1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
 2. Create the R2 bucket and extract/upload:
    ```bash
-   npx wrangler r2 bucket create gnaf-data
+   npx wrangler r2 bucket create gnaf-data --location oc
    tar -xf gnaf-shards-v20260301-gda2020.tar
    # Upload via R2's S3-compatible API
    aws s3 sync . s3://gnaf-data/gnaf/v20260301-gda2020/ \
@@ -190,19 +191,72 @@ Each quarterly GNAF release is published as a [GitHub release](https://github.co
    aws s3 cp metadata.json s3://gnaf-data/gnaf/v20260301-gda2020/metadata.json \
      --endpoint-url https://<account_id>.r2.cloudflarestorage.com
    ```
-3. Create a version pointer:
+3. Create a D1 database and load the search index:
    ```bash
-   echo '{"version":"v20260301-gda2020"}' | aws s3 cp - s3://gnaf-data/gnaf/latest.json \
-     --endpoint-url https://<account_id>.r2.cloudflarestorage.com
-   ```
-4. Load the search index into D1:
-   ```bash
-   npx wrangler d1 create gnaf-search  # first time only
+   npx wrangler d1 create gnaf-search-v20260301-gda2020 --location=OC
    for f in search-index/*.sql; do
-     npx wrangler d1 execute gnaf-search --remote --file="$f"
+     npx wrangler d1 execute gnaf-search-v20260301-gda2020 --remote --file="$f"
    done
    ```
-5. Set the `GNAF_VERSION` var in `wrangler.json` to match (e.g. `v20260301-gda2020`)
+4. Update `wrangler.json` with the new D1 `database_id`, `database_name`, and set `vars.GNAF_VERSION` to the version string (e.g. `v20260301-gda2020`)
+
+## PMTiles Overlays
+
+The `/api/addresses/:pid` endpoint can enrich address responses with additional geographic attributes (e.g. electricity distributor, SA1/SA2, LGA, electorate) by performing point-in-polygon queries against PMTiles vector tile files stored in a separate R2 bucket.
+
+### Setup
+
+1. Create the R2 bucket with an Oceania location hint (for Australian data):
+   ```bash
+   npx wrangler r2 bucket create gnaf-pmtiles --location oc
+   ```
+
+2. Upload PMTiles files to the bucket:
+   ```bash
+   npx wrangler r2 object put gnaf-pmtiles/elec_distributor_12.pmtiles --file=elec_distributor_12.pmtiles
+   ```
+
+3. Configure `PMTILES_LAYERS` in `wrangler.json` (or `.dev.vars` for local dev):
+   ```json
+   [
+     {
+       "name": "elec_distributor",
+       "label": "Electricity Distributor",
+       "file": "elec_distributor_12.pmtiles",
+       "layer": "elec_distributor",
+       "zoom": 12,
+       "properties": ["elec_distributor"]
+     }
+   ]
+   ```
+
+   | Field | Description |
+   |-------|-------------|
+   | `name` | Unique key in the response `overlays` object |
+   | `label` | Human-readable display label |
+   | `file` | PMTiles filename in the R2 bucket |
+   | `layer` | Vector tile layer name within the PMTiles file |
+   | `zoom` | Zoom level to query tiles at |
+   | `properties` | Which feature properties to include (omit for all) |
+
+### Response
+
+When overlays are configured and a match is found, the address response includes an `overlays` field. Each overlay contains a `features` array with all matching polygons:
+
+```json
+{
+  "pid": "GAACT717940975",
+  "sla": "113 CANBERRA AV, GRIFFITH ACT 2603",
+  "overlays": {
+    "elec_distributor": {
+      "label": "Electricity Distributor",
+      "features": [
+        { "elec_distributor": "Evoenergy" }
+      ]
+    }
+  }
+}
+```
 
 ## Deployment
 
@@ -214,6 +268,61 @@ npm run deploy
 ```
 
 The worker uses a native R2 binding (`GNAF_BUCKET`) configured in `wrangler.json` — no secrets are needed for data access.
+
+## Pre-computed Short Queries
+
+Common short queries are pre-computed at build time during the GitHub Actions pipeline (`npm run pipeline:precompute`). The results are stored as individual JSON files in the release archive and uploaded to R2 (`gnaf/{version}/precomputed/{query}.json`). These are served directly for matching requests, bypassing D1 + R2 shard lookups entirely.
+
+Pre-computed query patterns (3,672 total):
+| Pattern | Example | Count |
+|---------|---------|-------|
+| 1-char letter or digit | `a`, `5` | 36 |
+| 2-char all letters | `sy`, `ke` | 676 |
+| 2-char all digits | `12`, `05` | 100 |
+| 1 digit + space + letter | `1 m`, `5 k` | 260 |
+| 2 digits + space + letter | `12 k`, `25 s` | 2,600 |
+
+### How short query serving works
+
+When a search request arrives with a short query (e.g. `?q=sy`):
+
+1. The query is normalized: trimmed, non-alphanumeric characters stripped (spaces preserved), lowercased
+2. If the normalized query matches a pre-computed pattern, the worker loads the result from R2 (with Cache API caching)
+3. The response is returned with an `X-Precomputed: true` header
+4. If no pre-computed result exists, the query falls through to the normal D1 + R2 search path and the result is lazily stored in R2 for future requests
+
+## Cache Warming
+
+A Cloudflare Cron Trigger runs every minute to keep caches warm and reduce cold-start latency for search requests.
+
+### What it does
+
+The `scheduled` handler in the worker performs two tasks:
+
+1. **D1 keepalive** — executes `SELECT 1` to prevent cold D1 connections on the next user request.
+
+2. **Warm R2 street shard caches** — iterates all 4,096 street shard files (used by search/autocomplete), checks the Cloudflare Cache API, and fetches from R2 on miss to populate the cache.
+
+### Configuration
+
+The cron trigger is configured in `wrangler.json`:
+
+```json
+"triggers": {
+  "crons": ["* * * * *"]
+}
+```
+
+### R2 storage layout
+
+```
+gnaf/{version}/precomputed/
+├── a.json             # Pre-computed result for query "a"
+├── sy.json            # Pre-computed result for query "sy"
+├── 1 m.json           # Pre-computed result for query "1 m"
+├── 12 k.json          # Pre-computed result for query "12 k"
+└── ...                # 3,672 files total
+```
 
 ## Tech Stack
 

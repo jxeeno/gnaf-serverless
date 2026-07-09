@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { Fragment, useState, useCallback, useRef, useEffect } from "react";
 import { Search, MapPin, Hash, FileJson, Table, ChevronLeft, ChevronRight, Loader2, Github, Building2, X, ChevronDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -231,6 +231,31 @@ function AddressDetail({ address }: { address: AddressResponse }) {
                 </CardContent>
               </Card>
             )}
+
+            {address.overlays && Object.keys(address.overlays).length > 0 && (
+              <Card className="sm:col-span-2">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Overlays</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {Object.entries(address.overlays).map(([key, overlay]) => (
+                    <div key={key}>
+                      <p className="text-xs font-medium text-muted-foreground mb-1.5">{overlay.label}</p>
+                      {overlay.features.map((feature, fi) => (
+                        <div key={fi} className={`grid grid-cols-[1fr_2fr] gap-x-2 gap-y-1 text-sm${fi > 0 ? " mt-2 pt-2 border-t" : ""}`}>
+                          {Object.entries(feature).map(([prop, value]) => (
+                            <Fragment key={prop}>
+                              <span className="text-muted-foreground truncate" title={prop}>{prop}</span>
+                              <span className="font-mono text-xs break-all">{String(value)}</span>
+                            </Fragment>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
           </div>
         </TabsContent>
 
@@ -351,7 +376,7 @@ export default function App() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setSearchResults([]);
       setSearchAddresses([]);
       setSearchMeta(null);

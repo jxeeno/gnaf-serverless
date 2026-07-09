@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSearchQuery, scoreAddress } from "./search-query.js";
+import { parseSearchQuery, scoreAddress, computeHighlightRanges } from "./search-query.js";
 import type { StreetAddressEntry } from "./types.js";
 
 // ──────────────────────────────────────────────
@@ -289,48 +289,105 @@ describe("parseSearchQuery", () => {
   });
 
   describe("FTS5 query generation", () => {
-    it("generates prefix search on last token", () => {
+    it("generates quoted prefix search on last token", () => {
       const r = parseSearchQuery("murray")!;
-      expect(r.ftsQuery).toBe("MURRAY*");
+      expect(r.ftsQuery).toBe('"MURRAY"*');
     });
 
-    it("exact match on non-last tokens, prefix on last", () => {
+    it("exact match on non-last tokens, quoted prefix on last", () => {
       const r = parseSearchQuery("christmas murray")!;
-      expect(r.ftsQuery).toBe('"CHRISTMAS" AND MURRAY*');
+      expect(r.ftsQuery).toBe('"CHRISTMAS" AND "MURRAY"*');
     });
 
-    it("expands street type synonyms with OR", () => {
+    it("resolves full form street type to exact match (last token)", () => {
       const r = parseSearchQuery("murray road")!;
-      // ROAD should expand to (ROAD* OR RD*)
-      expect(r.ftsQuery).toMatch(/\(ROAD\* OR RD\*\)/);
-      expect(r.ftsQuery).toContain('"MURRAY"');
+      // ROAD is already the resolved full form — exact match, no wildcard
+      expect(r.ftsQuery).toBe('"MURRAY" AND ROAD');
     });
 
-    it("expands abbreviations to full forms", () => {
+    it("resolves abbreviation to exact full form + keeps original as quoted prefix (last token)", () => {
       const r = parseSearchQuery("murray rd")!;
-      // RD maps to [RD, ROAD] — either order is fine
-      expect(r.ftsQuery).toMatch(/\((RD\* OR ROAD\*|ROAD\* OR RD\*)\)/);
+      // RD → ROAD (exact), original "RD"* kept for prefix matching
+      expect(r.ftsQuery).toBe('"MURRAY" AND (ROAD OR "RD"*)');
     });
 
-    it("expands informal abbreviation AVE to AVENUE and AV", () => {
+    it("resolves informal abbreviation AVE (last token)", () => {
       const r = parseSearchQuery("murray ave")!;
-      expect(r.ftsQuery).toContain("AVE*");
-      expect(r.ftsQuery).toContain("AVENUE*");
-      expect(r.ftsQuery).toContain("AV*");
+      // AVE → AVENUE (exact), original "AVE"* kept for prefix matching (e.g., AVALON)
+      expect(r.ftsQuery).toBe('"MURRAY" AND (AVENUE OR "AVE"*)');
     });
 
-    it("expands informal abbreviation CRES to CRESCENT and CR", () => {
+    it("resolves informal abbreviation CRES (last token)", () => {
       const r = parseSearchQuery("murray cres")!;
-      expect(r.ftsQuery).toContain("CRES*");
-      expect(r.ftsQuery).toContain("CRESCENT*");
-      expect(r.ftsQuery).toContain("CR*");
+      // CRES → CRESCENT (exact), original "CRES"* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (CRESCENT OR "CRES"*)');
     });
 
-    it("expands informal abbreviation BLVD to BOULEVARD and BVD", () => {
+    it("resolves informal abbreviation BLVD (last token)", () => {
       const r = parseSearchQuery("murray blvd")!;
-      expect(r.ftsQuery).toContain("BLVD*");
-      expect(r.ftsQuery).toContain("BOULEVARD*");
-      expect(r.ftsQuery).toContain("BVD*");
+      // BLVD → BOULEVARD (exact), original "BLVD"* kept
+      expect(r.ftsQuery).toBe('"MURRAY" AND (BOULEVARD OR "BLVD"*)');
+    });
+
+    it("partial full-form prefix matches naturally", () => {
+      // User types "ROA" — not a known abbreviation, stays as "ROA"* which matches ROAD in index
+      const r = parseSearchQuery("murray roa")!;
+      expect(r.ftsQuery).toBe('"MURRAY" AND "ROA"*');
+    });
+
+    it("abbreviation prefix still matches locality names (av → AVALON)", () => {
+      // "AV" is a known abbreviation for AVENUE — exact AVENUE + "AV"*
+      const r = parseSearchQuery("av")!;
+      expect(r.ftsQuery).toContain('"AV"*');
+      expect(r.ftsQuery).toContain("AVENUE");
+      expect(r.ftsQuery).not.toContain("AVENUE*");
+    });
+
+    it("resolves abbreviation in non-last position, keeping original too", () => {
+      const r = parseSearchQuery("murray rd sydney")!;
+      expect(r.ftsQuery).toContain('"ROAD"');
+      expect(r.ftsQuery).toContain('"RD"');
+    });
+
+    it("resolves street suffix abbreviation N to full form NORTH (last token)", () => {
+      const r = parseSearchQuery("murray rd n")!;
+      expect(r.ftsQuery).toContain("NORTH");
+      expect(r.ftsQuery).toContain('"N"*');
+    });
+
+    it("resolves multi-word suffix NE to quoted NORTH EAST (last token)", () => {
+      const r = parseSearchQuery("murray rd ne")!;
+      expect(r.ftsQuery).toContain('"NORTH EAST"');
+      expect(r.ftsQuery).toContain('"NE"*');
+    });
+
+    it("resolves suffix abbreviation in non-last position", () => {
+      const r = parseSearchQuery("murray rd n sydney")!;
+      expect(r.ftsQuery).toContain('"NORTH"');
+      expect(r.ftsQuery).toContain('"N"');
+    });
+
+    it("quotes FTS5 keyword OR in prefix search", () => {
+      const r = parseSearchQuery("or")!;
+      // "OR" is an FTS5 operator — must be quoted to avoid syntax error
+      expect(r.ftsQuery).toBe('"OR"*');
+    });
+
+    it("quotes FTS5 keyword AND in prefix search", () => {
+      const r = parseSearchQuery("an")!;
+      // "AN" is not a keyword, but verify quoting works for all tokens
+      expect(r.ftsQuery).toBe('"AN"*');
+    });
+
+    it("quotes FTS5 keyword NOT in prefix search", () => {
+      const r = parseSearchQuery("not")!;
+      expect(r.ftsQuery).toBe('"NOT"*');
+    });
+
+    it("handles OR as non-last token (quoted exact match)", () => {
+      const r = parseSearchQuery("or street")!;
+      expect(r.ftsQuery).toContain('"OR"');
+      expect(r.ftsQuery).not.toMatch(/\bOR\b[^"*]/); // bare OR should not appear
     });
 
     it("numbers are excluded from FTS query", () => {
@@ -360,9 +417,9 @@ describe("scoreAddress", () => {
   }
 
   describe("no numbers in query", () => {
-    it("returns 1 (representative) for any entry", () => {
+    it("returns 2 (preferred) for bare street entry without flat/level", () => {
       const parsed = parseSearchQuery("murray street")!;
-      expect(scoreAddress(entry({ d: "28" }), parsed)).toBe(1);
+      expect(scoreAddress(entry({ d: "28" }), parsed)).toBe(2);
     });
   });
 
@@ -1080,5 +1137,153 @@ describe("scoreAddress", () => {
       const parsed = parseSearchQuery("5 murray")!;
       expect(scoreAddress(entry({ d: "" }), parsed)).toBe(0);
     });
+  });
+});
+
+// ──────────────────────────────────────────────
+// computeHighlightRanges
+// ──────────────────────────────────────────────
+
+describe("computeHighlightRanges", () => {
+  const baseComponents = {
+    streetName: "MURRAY",
+    streetType: "RD",
+    streetSuffix: null,
+    localityName: "VILLAWOOD",
+    state: "NSW",
+    postcode: "2163",
+  };
+
+  it("highlights street name and type for basic query", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd");
+    expect(ranges).toEqual([[0, 6], [7, 9]]);
+  });
+
+  it("highlights abbreviation via synonym match (ROA → ROAD → RD)", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray roa");
+    expect(ranges).toEqual([[0, 6], [7, 9]]);
+  });
+
+  it("highlights partial locality match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd villa");
+    expect(ranges).toEqual([[0, 6], [7, 9], [11, 16]]);
+  });
+
+  it("highlights full locality match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray rd villawood");
+    expect(ranges).toEqual([[0, 6], [7, 9], [11, 20]]);
+  });
+
+  it("does not false-positive match ST inside FORREST", () => {
+    const display = "FORREST ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "FORREST",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "forrest st");
+    // ST should only highlight the street type at position 8-10, not inside FORREST
+    expect(ranges).toEqual([[0, 7], [8, 10]]);
+  });
+
+  it("highlights street number in display prefix (SLA)", () => {
+    const sla = "28 MURRAY RD, VILLAWOOD NSW 2163";
+    const ranges = computeHighlightRanges(sla, {
+      ...baseComponents,
+      displayPrefix: "28",
+    }, "28 murray");
+    expect(ranges).toContainEqual([0, 2]); // "28"
+    expect(ranges).toContainEqual([3, 9]); // "MURRAY"
+  });
+
+  it("highlights unit + flat + street number in SLA", () => {
+    const sla = "UNIT 3, 28 MURRAY RD, VILLAWOOD NSW 2163";
+    const ranges = computeHighlightRanges(sla, {
+      ...baseComponents,
+      displayPrefix: "UNIT 3, 28",
+    }, "unit 3 28 murray");
+    expect(ranges).toContainEqual([5, 6]); // "3"
+    expect(ranges).toContainEqual([8, 10]); // "28"
+    expect(ranges).toContainEqual([11, 17]); // "MURRAY"
+  });
+
+  it("highlights apostrophe street name when query omits apostrophe", () => {
+    const display = "O'DEA ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "O'DEA",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "odea st");
+    expect(ranges).toEqual([[0, 5], [6, 8]]);
+  });
+
+  it("highlights apostrophe street name when query includes apostrophe", () => {
+    const display = "O'DEA ST, SYDNEY, NSW, 2000";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "O'DEA",
+      streetType: "ST",
+      streetSuffix: null,
+      localityName: "SYDNEY",
+      state: "NSW",
+      postcode: "2000",
+    }, "o'dea st");
+    expect(ranges).toEqual([[0, 5], [6, 8]]);
+  });
+
+  it("returns empty array for empty query", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    expect(computeHighlightRanges(display, baseComponents, "")).toEqual([]);
+  });
+
+  it("highlights state match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray nsw");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([22, 25]); // NSW
+  });
+
+  it("highlights postcode match", () => {
+    const display = "MURRAY RD, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, baseComponents, "murray 2163");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+  });
+
+  it("highlights street suffix via synonym match (NORTH typed as N)", () => {
+    const display = "MURRAY RD N, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "MURRAY",
+      streetType: "RD",
+      streetSuffix: "N",
+      localityName: "VILLAWOOD",
+      state: "NSW",
+      postcode: "2163",
+    }, "murray rd north");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([7, 9]); // RD
+    expect(ranges).toContainEqual([10, 11]); // N (full component highlighted via synonym)
+  });
+
+  it("highlights street suffix when query uses abbreviation", () => {
+    const display = "MURRAY RD N, VILLAWOOD, NSW, 2163";
+    const ranges = computeHighlightRanges(display, {
+      streetName: "MURRAY",
+      streetType: "RD",
+      streetSuffix: "N",
+      localityName: "VILLAWOOD",
+      state: "NSW",
+      postcode: "2163",
+    }, "murray rd n");
+    expect(ranges).toContainEqual([0, 6]); // MURRAY
+    expect(ranges).toContainEqual([7, 9]); // RD
+    expect(ranges).toContainEqual([10, 11]); // N
   });
 });
