@@ -42,13 +42,13 @@
     "SHARD_PREFIX_LENGTH": "3",
     "SEARCH_BACKEND": "d1",
     "PMTILES_LAYERS": "[{\"name\":\"elec_distributor\",\"label\":\"Electricity Distributor\",\"file\":\"elec_distributor_12.pmtiles\",\"layer\":\"elec_distributor\",\"zoom\":12,\"properties\":[\"elec_distributor\"]}]",
-    "GNAF_VERSION": "v20260913-aug2026-gda2020"
+    "GNAF_VERSION": "v20260913-aug2026-gda2020-r2search"
   },
   "d1_databases": [
     {
       "binding": "SEARCH_DB",
-      "database_name": "gnaf-search-v20260913-aug2026-gda2020",
-      "database_id": "f7728e58-61d4-4a35-8739-b2a28dc36418",
+      "database_name": "gnaf-search-v20260913-aug2026-gda2020-r2search",
+      "database_id": "e5e87959-0cac-4a08-b443-8da67ea0aea7",
       "remote": true
     }
   ],
