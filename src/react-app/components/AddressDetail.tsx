@@ -1,4 +1,5 @@
 import React from "react";
+import { Link } from "@tanstack/react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,13 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
           )}
           {address.lpid && (
             <Badge variant="outline" className="font-mono text-xs">Lot/DP: {address.lpid}</Badge>
+          )}
+          {address.alias && (
+            <Link to="/address/$gnafId" params={{ gnafId: address.alias.principalPid }}>
+              <Badge variant="outline" className="text-xs hover:bg-muted">
+                Alias ({address.alias.type.name}) of <span className="font-mono ml-1">{address.alias.principalPid}</span>
+              </Badge>
+            </Link>
           )}
         </div>
         <h2 className="text-xl font-semibold tracking-tight">{address.sla}</h2>
@@ -181,6 +189,26 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
                         </span>
                       </>
                     )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {address.aliases && address.aliases.length > 0 && (
+              <Card className="sm:col-span-2">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">Aliases ({address.aliases.length})</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                    {address.aliases.map((a) => (
+                      <React.Fragment key={a.pid}>
+                        <Link to="/address/$gnafId" params={{ gnafId: a.pid }} className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground">
+                          {a.pid}
+                        </Link>
+                        <span>{a.type.name}</span>
+                      </React.Fragment>
+                    ))}
                   </div>
                 </CardContent>
               </Card>

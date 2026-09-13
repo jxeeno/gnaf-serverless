@@ -98,6 +98,7 @@ export async function importGnaf(): Promise<DuckDBInstance> {
     "ADDRESS_MESH_BLOCK_2021",
     "MB_2016",
     "MB_2021",
+    "ADDRESS_ALIAS",
   ];
 
   // Tables that need all states regardless of filter (reference/lookup data)
@@ -116,6 +117,7 @@ export async function importGnaf(): Promise<DuckDBInstance> {
     "GEOCODED_LEVEL_TYPE_AUT",
     "GEOCODE_RELIABILITY_AUT",
     "LOCALITY_CLASS_AUT",
+    "ADDRESS_ALIAS_TYPE_AUT",
   ];
 
   // Import state-specific tables (filtered by GNAF_STATES)
@@ -296,6 +298,61 @@ export async function importGnaf(): Promise<DuckDBInstance> {
   result = await conn.run(`SELECT count(*) as cnt FROM addresses`);
   rows = await result.getRows();
   console.log(`  → ${rows[0][0]} addresses`);
+
+  // Step 3: Link alias addresses to their principals (both directions).
+  // Only pairs where both addresses survived the join above are kept, so links never dangle.
+  console.log("Linking address aliases...");
+  await run(`
+    CREATE OR REPLACE TABLE address_alias_lookup AS
+    SELECT
+      aa.alias_pid,
+      aa.principal_pid,
+      aa.alias_type_code,
+      aat.name AS alias_type_name
+    FROM address_alias AS aa
+    LEFT JOIN address_alias_type_aut AS aat ON aa.alias_type_code = aat.code
+    WHERE (aa.date_retired IS NULL OR aa.date_retired = '')
+      AND aa.alias_pid IN (SELECT gnaf_pid FROM addresses)
+      AND aa.principal_pid IN (SELECT gnaf_pid FROM addresses)
+    QUALIFY row_number() OVER (
+      PARTITION BY aa.alias_pid
+      ORDER BY aa.date_created DESC, aa.address_alias_pid
+    ) = 1
+  `);
+
+  await run(`ALTER TABLE addresses ADD COLUMN principal_pid VARCHAR`);
+  await run(`ALTER TABLE addresses ADD COLUMN alias_type_code VARCHAR`);
+  await run(`ALTER TABLE addresses ADD COLUMN alias_type_name VARCHAR`);
+  // Encoded as "pid|code|name;pid|code|name" — decoded in shard.ts
+  await run(`ALTER TABLE addresses ADD COLUMN alias_list VARCHAR`);
+
+  await run(`
+    UPDATE addresses
+    SET principal_pid = l.principal_pid,
+        alias_type_code = l.alias_type_code,
+        alias_type_name = l.alias_type_name
+    FROM address_alias_lookup AS l
+    WHERE addresses.gnaf_pid = l.alias_pid
+  `);
+  await run(`
+    UPDATE addresses
+    SET alias_list = p.alias_list
+    FROM (
+      SELECT
+        principal_pid,
+        string_agg(
+          alias_pid || '|' || COALESCE(alias_type_code, '') || '|' || COALESCE(alias_type_name, ''),
+          ';' ORDER BY alias_pid
+        ) AS alias_list
+      FROM address_alias_lookup
+      GROUP BY principal_pid
+    ) AS p
+    WHERE addresses.gnaf_pid = p.principal_pid
+  `);
+
+  result = await conn.run(`SELECT count(*) as cnt FROM address_alias_lookup`);
+  rows = await result.getRows();
+  console.log(`  → ${rows[0][0]} alias links`);
 
   conn.disconnectSync();
   return instance;

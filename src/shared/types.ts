@@ -93,6 +93,14 @@ export interface ShardRecord {
   mb16?: string;
   /** mb_2021_code */
   mb21?: string;
+  /** principal_pid (alias records only) */
+  pp?: string;
+  /** alias_type_code (alias records only) */
+  atc?: string;
+  /** alias_type_name (alias records only) */
+  atn?: string;
+  /** aliases of this address as [pid, alias_type_code, alias_type_name] (principal records only) */
+  al?: [string, string, string][];
 }
 
 /** A shard file: map of GNAF PID → ShardRecord */
@@ -143,6 +151,16 @@ export interface AddressResponse {
   pid: string;
   lpid?: string;
   precedence?: "primary" | "secondary";
+  /** Present when this address is an alias of another (principal) address */
+  alias?: {
+    principalPid: string;
+    type: { code: string; name: string };
+  };
+  /** Alias addresses of this (principal) address */
+  aliases?: {
+    pid: string;
+    type: { code: string; name: string };
+  }[];
   sla: string;
   ssla?: string;
   mla: string[];

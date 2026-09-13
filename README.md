@@ -110,6 +110,29 @@ GET /api/addresses?lpid=CANB/GRIF/25/14     # ACT block/section
 }
 ```
 
+#### Address aliases
+
+GNAF links alternate forms of an address (alias) to a canonical one (principal) via `ADDRESS_ALIAS`. Alias addresses can be fetched by PID but are not included in search results.
+
+An alias address includes the principal it belongs to:
+
+```json
+"alias": {
+  "principalPid": "GANSW712199492",
+  "type": { "code": "RA", "name": "RANGED ADDRESS" }
+}
+```
+
+A principal address lists its aliases:
+
+```json
+"aliases": [
+  { "pid": "GANSW708314090", "type": { "code": "RA", "name": "RANGED ADDRESS" } }
+]
+```
+
+Alias types: `SYN` synonym, `RA` ranged address, `LD` level duplication, `FNNFS` flat number vs number-suffix (e.g. 1/25 vs 25A), `FPS` flat prefix/suffix (e.g. 2B vs B2), `CD` contributor defined.
+
 ## Development
 
 Install dependencies:
