@@ -19,6 +19,15 @@ function n<T>(val: T | null | undefined): T | undefined {
   return val;
 }
 
+/** Decode import.ts alias_list ("pid|code|name;...") into shard tuples */
+function parseAliasList(val: unknown): [string, string, string][] | undefined {
+  if (typeof val !== "string" || val === "") return undefined;
+  return val.split(";").map((entry) => {
+    const [pid, code = "", name = ""] = entry.split("|");
+    return [pid, code, name];
+  });
+}
+
 export function toShardRecord(row: Record<string, unknown>): ShardRecord {
   const rec: ShardRecord = {
     ap: (row.alias_principal as string) ?? "P",
@@ -68,6 +77,11 @@ export function toShardRecord(row: Record<string, unknown>): ShardRecord {
   if (n(row.legal_parcel_id)) rec.lpi = row.legal_parcel_id as string;
   if (n(row.mb_2016_code)) rec.mb16 = row.mb_2016_code as string;
   if (n(row.mb_2021_code)) rec.mb21 = row.mb_2021_code as string;
+  if (n(row.principal_pid)) rec.pp = row.principal_pid as string;
+  if (n(row.alias_type_code)) rec.atc = row.alias_type_code as string;
+  if (n(row.alias_type_name)) rec.atn = row.alias_type_name as string;
+  const al = parseAliasList(row.alias_list);
+  if (al) rec.al = al;
 
   return rec;
 }
@@ -174,6 +188,10 @@ function shardRecordFromChunk(
   const lpi = g("legal_parcel_id"); if (n(lpi)) rec.lpi = lpi as string;
   const mb16 = g("mb_2016_code"); if (n(mb16)) rec.mb16 = mb16 as string;
   const mb21 = g("mb_2021_code"); if (n(mb21)) rec.mb21 = mb21 as string;
+  const pp = g("principal_pid"); if (n(pp)) rec.pp = pp as string;
+  const atc = g("alias_type_code"); if (n(atc)) rec.atc = atc as string;
+  const atn = g("alias_type_name"); if (n(atn)) rec.atn = atn as string;
+  const al = parseAliasList(g("alias_list")); if (al) rec.al = al;
 
   return rec;
 }

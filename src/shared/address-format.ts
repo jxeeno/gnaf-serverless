@@ -312,5 +312,18 @@ export function formatAddressResponse(
     response.precedence = "primary";
   }
 
+  if (r.pp) {
+    response.alias = {
+      principalPid: r.pp,
+      type: { code: r.atc ?? "", name: r.atn ?? "" },
+    };
+  }
+  if (r.al?.length) {
+    response.aliases = r.al.map(([pid, code, name]) => ({
+      pid,
+      type: { code, name },
+    }));
+  }
+
   return response;
 }
