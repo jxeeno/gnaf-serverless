@@ -172,7 +172,13 @@ The pipeline downloads, processes, and uploads GNAF data. It runs via GitHub Act
 
 ### Pipeline Steps
 
-Run the steps in this order:
+Run the full pipeline:
+
+```bash
+npm run pipeline:run
+```
+
+Or run the steps individually, in this order:
 
 ```bash
 npm run pipeline:download      # Download GNAF ZIP from data.gov.au
@@ -185,7 +191,7 @@ npm run pipeline:upload        # Upload shards to R2 and update gnaf/latest.json
 
 Notes:
 
-- `npm run pipeline:run` only runs download, import, shard and upload. It does **not** generate the search index or pre-computed queries, so search won't work against the data it uploads. Use the individual steps above for a complete build.
+- `npm run pipeline:run` runs all six steps. It doesn't load the search index into D1; see [Loading the Search Index](#loading-the-search-index).
 - `pipeline:download` is skipped if `data/gnaf/` already exists. Delete `data/gnaf/` and `data/gnaf.zip` to pick up a newer GNAF release.
 - Local builds are versioned `v<YYYYMMDD>-<datum>` (e.g. `v20260913-gda2020`). CI builds include the GNAF release, e.g. `v20260815-may2026-gda2020`.
 - Upload writes to `gnaf/<version>/` and updates `gnaf/latest.json`. Set `GNAF_SKIP_LATEST=1` to leave the pointer alone.
