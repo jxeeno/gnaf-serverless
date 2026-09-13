@@ -15,6 +15,7 @@ import {
   SHARDS_DIR,
   ADDRESS_SHARDS_DIR,
   LOTDP_SHARDS_DIR,
+  SKIP_LATEST_POINTER,
 } from "./config.js";
 
 function createS3Client(): S3Client {
@@ -125,16 +126,20 @@ export async function upload(): Promise<void> {
     "application/json"
   );
 
-  // Update latest pointer
-  const latestPointer = JSON.stringify({ version, date: metadata.date });
-  await client.send(
-    new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: "gnaf/latest.json",
-      Body: Buffer.from(latestPointer),
-      ContentType: "application/json",
-    })
-  );
+  // Update latest pointer (skipped for test builds so they never become the default)
+  if (SKIP_LATEST_POINTER) {
+    console.log("Skipping gnaf/latest.json update (GNAF_SKIP_LATEST=1)");
+  } else {
+    const latestPointer = JSON.stringify({ version, date: metadata.date });
+    await client.send(
+      new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: "gnaf/latest.json",
+        Body: Buffer.from(latestPointer),
+        ContentType: "application/json",
+      })
+    );
+  }
 
   console.log(`Upload complete. Version: ${version}`);
 }

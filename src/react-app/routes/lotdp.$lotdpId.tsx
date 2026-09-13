@@ -128,6 +128,9 @@ function LotDpPage() {
                 >
                   <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   <span className="text-sm truncate">{r.sla}</span>
+                  {r.alias && (
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">alias</span>
+                  )}
                 </button>
               ))}
             </div>

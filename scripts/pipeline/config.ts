@@ -29,6 +29,9 @@ export const S3_BUCKET = process.env.S3_BUCKET ?? "gnaf";
 export const S3_ACCESS_KEY_ID = process.env.S3_ACCESS_KEY_ID ?? "";
 export const S3_SECRET_ACCESS_KEY = process.env.S3_SECRET_ACCESS_KEY ?? "";
 
+/** When "1", upload leaves gnaf/latest.json untouched (used for test builds) */
+export const SKIP_LATEST_POINTER = process.env.GNAF_SKIP_LATEST === "1";
+
 /** All states in GNAF */
 export const ALL_GNAF_STATES = [
   "ACT",
