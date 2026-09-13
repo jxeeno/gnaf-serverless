@@ -111,7 +111,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gnaf-duckdb
           path: data
@@ -139,7 +139,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all shard partitions
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           pattern: gnaf-shards-*
           merge-multiple: true
@@ -205,7 +205,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gnaf-duckdb
           path: data
@@ -244,13 +244,13 @@ jobs:
         run: npm ci
 
       - name: Download shard artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gnaf-shards
           path: data/shards
 
       - name: Download search index artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: gnaf-search-index
           path: data/shards
