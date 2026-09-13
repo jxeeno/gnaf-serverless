@@ -62,17 +62,27 @@ function getShardPrefixLength(env: Bindings): number {
 // Cache TTL for search responses (1 week — data only changes on GNAF version updates)
 const CACHE_TTL = 604800;
 
+/**
+ * Cache API key for a response, scoped to the GNAF data version so that a
+ * data deploy never serves responses cached from the previous version.
+ */
+function responseCacheKey(url: string, gnafVersion: string): Request {
+  const keyUrl = new URL(url);
+  keyUrl.searchParams.set("__gnaf_version", gnafVersion);
+  return new Request(keyUrl.toString(), { method: "GET" });
+}
+
 // Health check
 app.get("/api/health", (c) => c.json({ status: "ok" }));
 
 // GNAF metadata (version, address count, release info)
 app.get("/api/metadata", async (c) => {
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const cache = caches.default;
-  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
-  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const obj = await c.env.GNAF_BUCKET.get(`gnaf/${gnafVersion}/metadata.json`);
   if (!obj) {
     return c.json({ error: "Metadata not found" }, 404);
@@ -98,16 +108,17 @@ app.get("/api/addresses/search", async (c) => {
     );
   }
 
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
+
   // Check CF Cache API first
   const cache = caches.default;
-  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) {
     return cachedResponse;
   }
 
   const limit = Math.min(parseInt(c.req.query("limit") ?? "10", 10), 50);
-  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
 
   // For short queries, serve from pre-computed R2 data
   const normalized = normalizeQuery(q);
@@ -179,13 +190,13 @@ app.get("/api/addresses/search", async (c) => {
 
 // Get address by GNAF PID
 app.get("/api/addresses/:pid", async (c) => {
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const cache = caches.default;
-  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
   const pid = c.req.param("pid").toUpperCase();
-  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const shardPrefix = md5hex(pid).substring(0, prefixLen);
 
@@ -242,12 +253,12 @@ app.get("/api/addresses", async (c) => {
     );
   }
 
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const cache = caches.default;
-  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
-  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const prefixLen = getShardPrefixLength(c.env);
   const lpidShardPrefix = md5hex(lpid).substring(0, prefixLen);
 
@@ -308,8 +319,9 @@ app.get("/api/addresses", async (c) => {
 
 // Get all addresses on a street (for drill-down after search)
 app.get("/api/streets/:streetId/addresses", async (c) => {
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
   const cache = caches.default;
-  const cacheKey = new Request(c.req.url, { method: "GET" });
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
@@ -335,8 +347,6 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
   if (!street) {
     return c.json({ error: "Street not found", streetId }, 404);
   }
-
-  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
 
   // Determine which shard keys to fetch
   const keysToFetch: { shardPrefix: string; shardKey: string }[] = [];
