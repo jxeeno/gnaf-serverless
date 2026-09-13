@@ -11,7 +11,7 @@ import {
 } from "./r2.js";
 import { queryOverlays } from "./pmtiles.js";
 import { executeSearch, entryToSla } from "./search.js";
-import type { StreetRow } from "./search.js";
+import { createStreetFinder, resolveSearchBackend } from "./street-finders.js";
 import { normalizeQuery, isPrecomputedQuery, loadPrecomputedQuery, storePrecomputedQuery, warmShards } from "./warmup.js";
 
 type Bindings = {
@@ -19,6 +19,8 @@ type Bindings = {
   GNAF_VERSION?: string;
   SHARD_PREFIX_LENGTH: string;
   SEARCH_DB: D1Database;
+  /** Street search backend: "d1" (default) or "r2" (static index); `?backend=` overrides per request */
+  SEARCH_BACKEND?: string;
   PMTILES_BUCKET?: R2Bucket;
   PMTILES_LAYERS?: string;
 };
@@ -35,6 +37,10 @@ app.use(
       "X-R2-Fetches",
       "X-R2-Duration-Ms",
       "X-GNAF-Version",
+      "X-Search-Backend",
+      "X-Street-Index-Fetches",
+      "X-Street-Index-Rows",
+      "X-Street-Index-Duration-Ms",
     ],
   })
 );
@@ -66,9 +72,10 @@ const CACHE_TTL = 604800;
  * Cache API key for a response, scoped to the GNAF data version so that a
  * data deploy never serves responses cached from the previous version.
  */
-function responseCacheKey(url: string, gnafVersion: string): Request {
+function responseCacheKey(url: string, gnafVersion: string, searchBackend?: string): Request {
   const keyUrl = new URL(url);
   keyUrl.searchParams.set("__gnaf_version", gnafVersion);
+  if (searchBackend) keyUrl.searchParams.set("__search_backend", searchBackend);
   return new Request(keyUrl.toString(), { method: "GET" });
 }
 
@@ -109,10 +116,11 @@ app.get("/api/addresses/search", async (c) => {
   }
 
   const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
+  const backend = resolveSearchBackend(c.env.SEARCH_BACKEND, c.req.query("backend"));
 
   // Check CF Cache API first
   const cache = caches.default;
-  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion, backend);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) {
     return cachedResponse;
@@ -153,9 +161,10 @@ app.get("/api/addresses/search", async (c) => {
     return response;
   }
 
-  // Full search via D1 + R2
+  // Full search: streets from D1 or the R2 index, addresses from R2 street shards
+  const finder = createStreetFinder(c.env, backend, gnafVersion, c.executionCtx);
   const result = await executeSearch(
-    q, limit, c.env.SEARCH_DB, c.env.GNAF_BUCKET, gnafVersion, c.executionCtx
+    q, limit, finder, c.env.GNAF_BUCKET, gnafVersion, c.executionCtx
   );
 
   if (!result) {
@@ -168,8 +177,9 @@ app.get("/api/addresses/search", async (c) => {
     return response;
   }
 
-  // Lazily store precomputed result in R2 for future requests
-  if (isPrecomputed) {
+  // Lazily store precomputed result in R2 for future requests (D1 results only,
+  // so the prototype R2 backend never writes shared precomputed files)
+  if (isPrecomputed && backend === "d1") {
     c.executionCtx.waitUntil(
       storePrecomputedQuery(c.env.GNAF_BUCKET, gnafVersion, normalized, result.body)
     );
@@ -178,8 +188,12 @@ app.get("/api/addresses/search", async (c) => {
   const response = c.json(result.body, 200, {
     "Cache-Control": `public, max-age=${CACHE_TTL}`,
     "X-GNAF-Version": gnafVersion,
-    "X-D1-Rows-Read": String(result.meta.d1RowsRead),
-    "X-D1-Duration-Ms": String(result.meta.d1Duration),
+    "X-Search-Backend": result.meta.backend,
+    "X-D1-Rows-Read": String(result.meta.backend === "d1" ? result.meta.streetRowsRead : 0),
+    "X-D1-Duration-Ms": String(result.meta.backend === "d1" ? result.meta.streetDuration : 0),
+    "X-Street-Index-Fetches": String(result.meta.streetFetches),
+    "X-Street-Index-Rows": String(result.meta.backend === "r2" ? result.meta.streetRowsRead : 0),
+    "X-Street-Index-Duration-Ms": String(result.meta.backend === "r2" ? result.meta.streetDuration : 0),
     "X-R2-Fetches": String(result.meta.r2Fetches),
     "X-R2-Duration-Ms": String(result.meta.r2Duration),
   });
@@ -320,8 +334,9 @@ app.get("/api/addresses", async (c) => {
 // Get all addresses on a street (for drill-down after search)
 app.get("/api/streets/:streetId/addresses", async (c) => {
   const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
+  const backend = resolveSearchBackend(c.env.SEARCH_BACKEND, c.req.query("backend"));
   const cache = caches.default;
-  const cacheKey = responseCacheKey(c.req.url, gnafVersion);
+  const cacheKey = responseCacheKey(c.req.url, gnafVersion, backend);
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
 
@@ -332,17 +347,9 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
 
   const digit = c.req.query("digit");
 
-  const db = c.env.SEARCH_DB.withSession();
-
-  // Look up the street from D1
-  const street = await db
-    .prepare(
-      `SELECT street_key, shard_prefix, street_name, street_type, street_suffix,
-              locality_name, state, postcode, digit_shards
-       FROM streets WHERE id = ?1`
-    )
-    .bind(streetId)
-    .first<StreetRow>();
+  const street = await createStreetFinder(
+    c.env, backend, gnafVersion, c.executionCtx
+  ).findById(streetId);
 
   if (!street) {
     return c.json({ error: "Street not found", streetId }, 404);
@@ -409,7 +416,7 @@ app.get("/api/streets/:streetId/addresses", async (c) => {
     for (const entry of entries) {
       addresses.push({
         p: entry.p,
-        s: entryToSla(entry, street as unknown as StreetRow),
+        s: entryToSla(entry, street),
         n: entry.n,
         l: entry.l,
         f: entry.f,
@@ -446,7 +453,9 @@ export default {
     const version = await resolveGnafVersion(env, ctx);
 
     // D1 keepalive — prevents cold connection on next user request
-    await env.SEARCH_DB.prepare("SELECT 1").first();
+    if (resolveSearchBackend(env.SEARCH_BACKEND) === "d1") {
+      await env.SEARCH_DB.prepare("SELECT 1").first();
+    }
 
     // Warm all R2 street shard caches
     await warmShards(env.GNAF_BUCKET, version);

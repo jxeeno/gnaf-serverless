@@ -63,6 +63,8 @@
 		"pipeline:search-index": "tsx scripts/pipeline/search-index.ts",
 		"pipeline:precompute": "tsx scripts/pipeline/precompute.ts",
 		"pipeline:run": "tsx scripts/pipeline/run.ts",
+		"pipeline:search-r2-index": "tsx scripts/pipeline/search-r2-index.ts",
+		"search:compare": "tsx scripts/pipeline/compare-search.ts",
 		"test": "vitest run --config vitest.config.ts",
 		"test:watch": "vitest --config vitest.config.ts"
 	},

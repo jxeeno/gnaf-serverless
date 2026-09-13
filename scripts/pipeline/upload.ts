@@ -15,6 +15,7 @@ import {
   SHARDS_DIR,
   ADDRESS_SHARDS_DIR,
   LOTDP_SHARDS_DIR,
+  SEARCH_R2_INDEX_DIR,
   SKIP_LATEST_POINTER,
 } from "./config.js";
 
@@ -94,6 +95,53 @@ async function uploadDirectory(
   return uploaded;
 }
 
+async function listFiles(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await fsp.readdir(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...(await listFiles(fullPath)));
+    else files.push(fullPath);
+  }
+  return files;
+}
+
+/** Upload every file under localDir, keeping relative paths; .gz files are sent gzip-encoded */
+async function uploadTree(
+  client: S3Client,
+  localDir: string,
+  s3Prefix: string
+): Promise<number> {
+  let files: string[];
+  try {
+    files = await listFiles(localDir);
+  } catch {
+    console.warn(`  Directory ${localDir} not found, skipping`);
+    return 0;
+  }
+
+  let uploaded = 0;
+  const maxConcurrency = 20;
+  const executing = new Set<Promise<void>>();
+
+  for (const file of files) {
+    const relative = path.relative(localDir, file).split(path.sep).join("/");
+    const encoding = file.endsWith(".gz") ? "gzip" : undefined;
+    const p = uploadFile(client, file, `${s3Prefix}/${relative}`, "application/json", encoding).then(() => {
+      executing.delete(p);
+      uploaded++;
+      if (uploaded % 500 === 0) {
+        console.log(`  Uploaded ${uploaded}/${files.length} files to ${s3Prefix}/`);
+      }
+    });
+    executing.add(p);
+    if (executing.size >= maxConcurrency) {
+      await Promise.race(executing);
+    }
+  }
+  await Promise.all(executing);
+  return uploaded;
+}
+
 export async function upload(): Promise<void> {
   // Read metadata to get version
   const metadataPath = path.join(SHARDS_DIR, "metadata.json");
@@ -108,14 +156,15 @@ export async function upload(): Promise<void> {
   // Upload address, lot/DP, and street shards in parallel
   const streetShardsDir = path.join(SHARDS_DIR, "streets");
   const precomputedDir = path.join(SHARDS_DIR, "precomputed");
-  console.log("Uploading address, lot/DP, street shards, and precomputed queries...");
-  const [addressCount, lotdpCount, streetCount, precomputedCount] = await Promise.all([
+  console.log("Uploading address, lot/DP, street shards, precomputed queries, and search index...");
+  const [addressCount, lotdpCount, streetCount, precomputedCount, searchIndexCount] = await Promise.all([
     uploadDirectory(client, ADDRESS_SHARDS_DIR, `gnaf/${version}/addresses`, "application/json", "gzip"),
     uploadDirectory(client, LOTDP_SHARDS_DIR, `gnaf/${version}/lotdp`, "application/json", "gzip"),
     uploadDirectory(client, streetShardsDir, `gnaf/${version}/streets`, "application/json", "gzip"),
     uploadDirectory(client, precomputedDir, `gnaf/${version}/precomputed`, "application/json"),
+    uploadTree(client, SEARCH_R2_INDEX_DIR, `gnaf/${version}/search`),
   ]);
-  console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street, ${precomputedCount} precomputed shards`);
+  console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street, ${precomputedCount} precomputed shards, ${searchIndexCount} search index files`);
 
   // Upload metadata
   console.log("Uploading metadata...");

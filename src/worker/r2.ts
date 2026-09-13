@@ -4,8 +4,16 @@ export async function fetchAndDecompress(
   bucket: R2Bucket,
   key: string
 ): Promise<string> {
+  return (await fetchObjectText(bucket, key)) ?? "{}";
+}
+
+/** Fetch an R2 object as text, gunzipping gzip content; null if it doesn't exist */
+export async function fetchObjectText(
+  bucket: R2Bucket,
+  key: string
+): Promise<string | null> {
   const obj = await bucket.get(key);
-  if (!obj) return "{}";
+  if (!obj) return null;
 
   const bytes = new Uint8Array(await obj.arrayBuffer());
 

@@ -33,8 +33,12 @@ interface StreetAddress {
 }
 
 interface SearchMeta {
+  backend: string;
   d1RowsRead: number;
   d1Duration: number;
+  indexRows: number;
+  indexDuration: number;
+  indexFetches: number;
   s3Fetches: number;
   s3Duration: number;
 }
@@ -51,6 +55,17 @@ interface RequestLogEntry {
   streets: number;
   addresses: number;
   stale: boolean;
+}
+
+interface SearchCorrection {
+  token: string;
+  replacements: string[];
+}
+
+/** `?backend=d1|r2` on the page URL is passed to the search APIs, to compare search backends */
+function searchBackend(): string | null {
+  const backend = new URLSearchParams(window.location.search).get("backend");
+  return backend === "d1" || backend === "r2" ? backend : null;
 }
 
 /** Render text with server-provided highlight ranges */
@@ -84,6 +99,7 @@ function IndexPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAddresses, setSearchAddresses] = useState<SearchAddressResult[]>([]);
   const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
+  const [corrections, setCorrections] = useState<SearchCorrection[]>([]);
   const [selectedStreet, setSelectedStreet] = useState<SearchResult | null>(null);
   const [streetAddresses, setStreetAddresses] = useState<StreetAddress[]>([]);
   const [streetLoading, setStreetLoading] = useState(false);
@@ -127,6 +143,7 @@ function IndexPage() {
       setSearchResults([]);
       setSearchAddresses([]);
       setSearchMeta(null);
+      setCorrections([]);
       setSelectedStreet(null);
       setActiveIndex(-1);
       return;
@@ -143,8 +160,9 @@ function IndexPage() {
       setError(null);
       const fetchStart = performance.now();
       try {
+        const backend = searchBackend();
         const res = await fetch(
-          `/api/addresses/search?q=${encodeURIComponent(q)}&limit=10`,
+          `/api/addresses/search?q=${encodeURIComponent(q)}&limit=10${backend ? `&backend=${backend}` : ""}`,
           { signal: controller.signal }
         );
         if (!res.ok) {
@@ -158,9 +176,11 @@ function IndexPage() {
         const data: {
           streets: SearchResult[];
           addresses: SearchAddressResult[];
+          corrections?: SearchCorrection[];
         } = await res.json();
 
         const meta: SearchMeta = {
+          backend: res.headers.get("X-Search-Backend") ?? "d1",
           d1RowsRead: parseInt(
             res.headers.get("X-D1-Rows-Read") ?? "0",
             10
@@ -168,6 +188,9 @@ function IndexPage() {
           d1Duration: parseFloat(
             res.headers.get("X-D1-Duration-Ms") ?? "0"
           ),
+          indexRows: parseInt(res.headers.get("X-Street-Index-Rows") ?? "0", 10),
+          indexDuration: parseFloat(res.headers.get("X-Street-Index-Duration-Ms") ?? "0"),
+          indexFetches: parseInt(res.headers.get("X-Street-Index-Fetches") ?? "0", 10),
           s3Fetches: parseInt(res.headers.get("X-R2-Fetches") ?? "0", 10),
           s3Duration: parseFloat(
             res.headers.get("X-R2-Duration-Ms") ?? "0"
@@ -198,6 +221,7 @@ function IndexPage() {
         setSearchResults(data.streets);
         setSearchAddresses(data.addresses);
         setSearchMeta(meta);
+        setCorrections(data.corrections ?? []);
         setSelectedStreet(null);
         setDropdownOpen(true);
         setActiveIndex(-1);
@@ -208,6 +232,7 @@ function IndexPage() {
         setSearchResults([]);
         setSearchAddresses([]);
         setSearchMeta(null);
+        setCorrections([]);
       } finally {
         if (requestId === requestIdRef.current) {
           setSearchLoading(false);
@@ -285,7 +310,10 @@ function IndexPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/streets/${street.streetId}/addresses`);
+      const backend = searchBackend();
+      const res = await fetch(
+        `/api/streets/${street.streetId}/addresses${backend ? `?backend=${backend}` : ""}`
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -410,6 +438,19 @@ function IndexPage() {
                 ref={dropdownRef}
                 className="absolute z-50 left-0 right-0 top-full mt-1 max-h-[420px] overflow-auto rounded-lg border border-border bg-popover shadow-lg"
               >
+                {corrections.length > 0 && (
+                  <div className="px-3 py-2 border-b border-border text-xs text-muted-foreground">
+                    No exact matches. Showing results for{" "}
+                    {corrections.map((c, i) => (
+                      <span key={c.token}>
+                        {i > 0 && ", "}
+                        <span className="line-through">{c.token}</span>
+                        {" → "}
+                        <span className="font-medium text-foreground">{c.replacements.join(" / ")}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {searchAddresses.length > 0 && (
                   <div className="px-3 py-2">
                     <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
@@ -483,10 +524,17 @@ function IndexPage() {
                 {/* Performance footer */}
                 {searchMeta && (
                   <div className="border-t border-border px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
-                    <span>
-                      D1: {searchMeta.d1Duration.toFixed(0)}ms /{" "}
-                      {searchMeta.d1RowsRead.toLocaleString()} rows
-                    </span>
+                    {searchMeta.backend === "r2" ? (
+                      <span>
+                        R2 index: {searchMeta.indexDuration.toFixed(0)}ms /{" "}
+                        {searchMeta.indexRows.toLocaleString()} rows / {searchMeta.indexFetches} files
+                      </span>
+                    ) : (
+                      <span>
+                        D1: {searchMeta.d1Duration.toFixed(0)}ms /{" "}
+                        {searchMeta.d1RowsRead.toLocaleString()} rows
+                      </span>
+                    )}
                     <span>
                       R2: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
                       {searchMeta.s3Fetches} fetches

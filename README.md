@@ -14,6 +14,8 @@ Serverless Australian address lookup API with autocomplete, powered by the [Geoc
 
 Autocomplete address search. Returns matching streets and scored addresses.
 
+Pass `backend=r2` to use the static R2 search index instead of D1 (see [R2 Search Index](#r2-search-index-prototype)). When the R2 index corrects a misspelled word, the response includes `corrections`, e.g. `[{ "token": "SYDNY", "replacements": ["SYDNE"] }]`.
+
 Supports:
 - Street name search: `macquarie street` or `macquarie st` (synonym expansion)
 - Street number: `1 macquarie st`
@@ -184,7 +186,7 @@ Or run the steps individually, in this order:
 npm run pipeline:download      # Download GNAF ZIP from data.gov.au
 npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includes address aliases)
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
-npm run pipeline:search-index  # Generate street shards + D1 search index SQL
+npm run pipeline:search-index  # Generate street shards, D1 search index SQL and the R2 search index
 npm run pipeline:precompute    # Pre-compute short query results (requires search-index)
 npm run pipeline:upload        # Upload shards to R2 and update gnaf/latest.json
 ```
@@ -366,6 +368,38 @@ When a search request arrives with a short query (e.g. `?q=sy`):
 2. If the normalized query matches a pre-computed pattern, the worker loads the result from R2 (with Cache API caching)
 3. The response is returned with an `X-Precomputed: true` header
 4. If no pre-computed result exists, the query falls through to the normal D1 + R2 search path and the result is lazily stored in R2 for future requests
+
+## R2 Search Index (prototype)
+
+Street search can run without D1, using a static index stored in R2 alongside the address shards. It's selected with the `SEARCH_BACKEND` var in `wrangler.json` (`d1` by default) or per request with `?backend=r2` on `/api/addresses/search` and `/api/streets/:streetId/addresses`.
+
+The index is built by `pipeline:search-index` (or `pipeline:search-r2-index` from an existing `streets.json`) and uploaded under `gnaf/{version}/search/`:
+
+| Files | Contents |
+|---|---|
+| `meta.json.gz` | Street count, average words per street, row counts for common words and short prefixes |
+| `groups/{KEY}.json.gz` | Every word starting with `KEY` (its first 3 characters) and the streets containing it |
+| `common/{WORD}.json.gz` | Top streets for words in more than 5,000 streets (ROAD, STREET, NSW, ...) |
+| `prefixes/{P}.json.gz` | Top streets with a word starting with a 1–2 character prefix |
+| `names/{C}.json.gz` | Streets whose name starts with `C`, for single-letter searches like `20 w` |
+| `numbers/{KEY}.json.gz` | Streets whose number range overlaps a number bucket, for number-only searches |
+| `ids/{N}.json.gz` | Streets by id range, for street drill-down |
+| `vocab.json.gz` | Every word and how many streets use it, for fuzzy matching |
+
+Matching uses the same terms as the D1 FTS5 query, and ranking uses the same bonuses as the D1 `ORDER BY` plus a port of FTS5's bm25 scoring. Common words only filter candidates; when a query has nothing else (e.g. `road`), candidates come from the common word's top streets.
+
+**Fuzzy matching:** when a search matches nothing, words that aren't in the index are corrected to vocabulary words within 1 edit (2 for words of 8+ letters), including transpositions. A partly typed last word is compared against word prefixes. If that still finds nothing, known words are corrected too. Each edit applies a ranking penalty, and the response lists the `corrections`.
+
+### Comparing with D1
+
+`search:compare` runs the D1 SQL locally in `node:sqlite` against the R2 index over generated queries (names, partial typing, numbers, flats, typos) and reports how often results match. It needs Node 24+:
+
+```bash
+nvm use 24
+npm run search:compare -- --duckdb data/gnaf.duckdb --work /tmp/search-compare --samples 1000
+```
+
+Use `--streets data/shards/streets.json` instead of `--duckdb` to compare against a pipeline build, and `--report report.json` to save every query's results.
 
 ## Cache Warming
 

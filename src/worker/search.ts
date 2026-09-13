@@ -4,28 +4,16 @@ import {
   computeHighlightRanges,
 } from "../shared/search-query.js";
 import { reconstructSla } from "../shared/address-format.js";
-import type { StreetAddressEntry } from "../shared/types.js";
+import type {
+  QueryCorrection,
+  SearchBackend,
+  StreetFinder,
+  StreetFinderResult,
+} from "../shared/street-finder.js";
+import type { StreetAddressEntry, StreetRow } from "../shared/types.js";
 import { fetchStreetShard } from "./r2.js";
 
-export interface StreetRow {
-  id: number;
-  display: string;
-  display_search: string;
-  street_key: string;
-  shard_prefix: string;
-  street_name: string;
-  street_type: string | null;
-  street_suffix: string | null;
-  locality_name: string;
-  state: string;
-  postcode: string | null;
-  address_count: number;
-  digit_shards: string | null;
-  num_min: number | null;
-  num_max: number | null;
-  flat_min: number | null;
-  flat_max: number | null;
-}
+export type { StreetRow };
 
 export interface StreetResult {
   streetId: number;
@@ -46,14 +34,24 @@ export interface AddressResult {
 }
 
 export interface SearchMeta {
-  d1RowsRead: number;
-  d1Duration: number;
+  backend: SearchBackend;
+  /** Street lookup: D1 rows read, or index rows scored */
+  streetRowsRead: number;
+  streetDuration: number;
+  /** Index files requested for street lookup (R2 index only) */
+  streetFetches: number;
+  /** Street address shard fetches */
   r2Fetches: number;
   r2Duration: number;
 }
 
 export interface SearchResponse {
-  body: { streets: StreetResult[]; addresses: AddressResult[] };
+  body: {
+    streets: StreetResult[];
+    addresses: AddressResult[];
+    /** Present when results come from fuzzy-corrected words */
+    corrections?: QueryCorrection[];
+  };
   meta: SearchMeta;
 }
 
@@ -70,6 +68,32 @@ export function entryToSla(entry: StreetAddressEntry, street: StreetRow): string
   );
 }
 
+function searchMeta(
+  found: StreetFinderResult,
+  backend: SearchBackend,
+  r2Fetches: number,
+  r2Duration: number
+): SearchMeta {
+  return {
+    backend,
+    streetRowsRead: found.rowsRead,
+    streetDuration: found.durationMs,
+    streetFetches: found.fetches,
+    r2Fetches,
+    r2Duration,
+  };
+}
+
+/** Apply a street's fuzzy word replacements to the query so highlights line up */
+function highlightQuery(q: string, street: StreetRow): string {
+  if (!street.query_replacements) return q;
+  let result = q;
+  for (const [token, word] of Object.entries(street.query_replacements)) {
+    result = result.replace(new RegExp(`\\b${token}\\b`, "i"), word);
+  }
+  return result;
+}
+
 /**
  * Handle number-only queries (e.g., "5", "12") by finding popular streets
  * whose address range includes the number, then fetching sample addresses.
@@ -77,42 +101,22 @@ export function entryToSla(entry: StreetAddressEntry, street: StreetRow): string
 async function executeNumberOnlySearch(
   num: number,
   limit: number,
-  db: D1Database,
+  finder: StreetFinder,
   bucket: R2Bucket,
   version: string,
   ctx: ExecutionContext
 ): Promise<SearchResponse> {
-  const dbSession = db.withSession();
   const streetLimit = Math.max(30, limit * 3);
+  const found = await finder.findByNumber(num, streetLimit);
 
-  const searchResults = await dbSession
-    .prepare(
-      `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
-              s.street_name, s.street_type, s.street_suffix, s.locality_name,
-              s.state, s.postcode, s.address_count, s.digit_shards,
-              s.num_min, s.num_max, s.flat_min, s.flat_max
-       FROM streets AS s
-       WHERE s.num_min IS NOT NULL AND s.num_max IS NOT NULL
-         AND ?1 BETWEEN s.num_min AND s.num_max
-       ORDER BY s.address_count DESC
-       LIMIT ?2`
-    )
-    .bind(num, streetLimit)
-    .all<StreetRow>();
-
-  if (!searchResults.results.length) {
+  if (!found.rows.length) {
     return {
       body: { streets: [], addresses: [] },
-      meta: {
-        d1RowsRead: searchResults.meta?.rows_read ?? 0,
-        d1Duration: searchResults.meta?.duration ?? 0,
-        r2Fetches: 0,
-        r2Duration: 0,
-      },
+      meta: searchMeta(found, finder.backend, 0, 0),
     };
   }
 
-  const matchedStreets = searchResults.results;
+  const matchedStreets = found.rows;
   const numStr = String(num);
 
   const streets: StreetResult[] = matchedStreets.slice(0, limit).map((r) => ({
@@ -227,23 +231,19 @@ async function executeNumberOnlySearch(
 
   return {
     body: { streets, addresses },
-    meta: {
-      d1RowsRead: searchResults.meta?.rows_read ?? 0,
-      d1Duration: searchResults.meta?.duration ?? 0,
-      r2Fetches: fetchEntries.length,
-      r2Duration: s3Duration,
-    },
+    meta: searchMeta(found, finder.backend, fetchEntries.length, s3Duration),
   };
 }
 
 /**
- * Execute a search query against D1 + R2 and return structured results.
+ * Execute a search query: find ranked streets with the given finder (D1 or the
+ * R2 index), then score addresses from R2 street shards.
  * Returns null if the query doesn't parse (no text tokens).
  */
 export async function executeSearch(
   q: string,
   limit: number,
-  db: D1Database,
+  finder: StreetFinder,
   bucket: R2Bucket,
   version: string,
   ctx: ExecutionContext
@@ -251,117 +251,29 @@ export async function executeSearch(
   const parsed = parseSearchQuery(q);
 
   // Number-only queries (e.g., "5", "12") have no text tokens so parseSearchQuery
-  // returns null. Handle them by querying streets whose address range includes the
+  // returns null. Handle them by finding streets whose address range includes the
   // number, ordered by popularity (address_count), to show representative results.
   if (!parsed) {
     const numMatch = q.trim().match(/^(\d+)$/);
     if (!numMatch) return null;
-    return executeNumberOnlySearch(parseInt(numMatch[1], 10), limit, db, bucket, version, ctx);
+    return executeNumberOnlySearch(parseInt(numMatch[1], 10), limit, finder, bucket, version, ctx);
   }
 
-  const { numTokens, ftsQuery, streetHint, flatHint, levelHint } = parsed;
+  const { numTokens, streetHint, flatHint } = parsed;
 
-  const dbSession = db.withSession();
-
-  // Search FTS5 index with combined ranking in SQL.
-  // The ORDER BY combines FTS5 rank (negative, lower = better) with bonuses for:
-  // 1. Street name exact match vs prefix-only match (e.g., "KENT" over "KENTUCKY")
-  // 2. Street number within the street's address range
-  // 3. Flat number within the street's flat range
-  // This ensures relevant streets aren't cut off by the LIMIT.
+  // Ranking favours exact street name matches and streets whose number/flat
+  // ranges include the queried numbers, so fetch extra streets when numbers are present.
   const streetLimit = numTokens.length > 0 ? Math.max(30, limit * 3) : limit;
-  // First text token is typically the street name — used for exact vs prefix matching
-  const firstTextToken = parsed.textTokens[0];
+  const found = await finder.findByQuery(parsed, streetLimit);
 
-  // Optimization: when there's only 1 short text token (e.g., "20 W"), skip FTS5 and
-  // use a direct street_name LIKE query with num_min/num_max WHERE filters. FTS5
-  // prefix scans like W* read hundreds of thousands of rows; a LIKE query on an
-  // indexed column is much cheaper. Number hints > 999 are truncated to the first
-  // 3 digits (e.g., 8012 → 801) to provide a rough range filter without being too
-  // restrictive for large numbers.
-  const useDirectQuery =
-    parsed.textTokens.length === 1 && firstTextToken.length < 2;
-
-  const rankingExpr = `
-         (
-           CASE WHEN s.street_name = ?4 THEN
-                  CASE WHEN LENGTH(?4) >= 4 THEN 100 ELSE 15 END
-                WHEN s.street_name LIKE ?4 || '%' THEN 10
-           ELSE 0 END
-         )
-         + (
-           CASE WHEN ?2 IS NOT NULL AND s.num_min IS NOT NULL AND s.num_max IS NOT NULL THEN
-             CASE WHEN ?2 BETWEEN s.num_min AND s.num_max THEN 200 ELSE -50 END
-           ELSE 0 END
-         )
-         + (
-           CASE WHEN ?3 IS NOT NULL AND s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL THEN
-             CASE WHEN ?3 BETWEEN s.flat_min AND s.flat_max THEN 50 ELSE 0 END
-           ELSE 0 END
-         )
-         + (
-           CASE WHEN s.address_count >= 2000 THEN 20
-                WHEN s.address_count >= 500 THEN 15
-                WHEN s.address_count >= 100 THEN 10
-                WHEN s.address_count >= 20 THEN 5
-           ELSE 0 END
-         )`;
-
-  let searchResults: D1Result<StreetRow>;
-
-  if (useDirectQuery) {
-    // Truncate hints to first 3 digits for WHERE filter (e.g., 8012 → 801)
-    // This provides a rough range filter without being too restrictive for large numbers
-    const capTo3 = (n: number | null) =>
-      n != null && n > 999 ? parseInt(String(n).substring(0, 3), 10) : n;
-    searchResults = await dbSession
-      .prepare(
-        `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
-                s.street_name, s.street_type, s.street_suffix, s.locality_name,
-                s.state, s.postcode, s.address_count, s.digit_shards,
-                s.num_min, s.num_max, s.flat_min, s.flat_max
-         FROM streets AS s
-         WHERE s.street_name LIKE ?1 || '%'
-           AND (?2 IS NULL OR (s.num_min IS NOT NULL AND s.num_max IS NOT NULL AND ?2 BETWEEN s.num_min AND s.num_max))
-           AND (?3 IS NULL OR (s.flat_min IS NOT NULL AND s.flat_max IS NOT NULL AND ?3 BETWEEN s.flat_min AND s.flat_max))
-         -- No ORDER BY here: this direct-query path is used for single-char street names
-         -- (e.g., "20 W") where FTS5 is too expensive. Adding ORDER BY would force a full
-         -- table scan defeating the purpose. The FTS path below handles ranking instead.
-         LIMIT ?5`
-      )
-      .bind(firstTextToken, capTo3(streetHint), capTo3(flatHint ?? levelHint), firstTextToken, streetLimit)
-      .all<StreetRow>();
-  } else {
-    searchResults = await dbSession
-      .prepare(
-        `SELECT s.id, s.display, s.display_search, s.street_key, s.shard_prefix,
-                s.street_name, s.street_type, s.street_suffix, s.locality_name,
-                s.state, s.postcode, s.address_count, s.digit_shards,
-                s.num_min, s.num_max, s.flat_min, s.flat_max
-         FROM streets_fts AS fts
-         JOIN streets AS s ON s.id = fts.rowid
-         WHERE streets_fts MATCH ?1
-         ORDER BY rank - (${rankingExpr})
-         LIMIT ?5`
-      )
-      .bind(ftsQuery, streetHint, flatHint ?? levelHint, firstTextToken, streetLimit)
-      .all<StreetRow>();
-  }
-
-  if (!searchResults.results.length) {
+  if (!found.rows.length) {
     return {
       body: { streets: [], addresses: [] },
-      meta: {
-        d1RowsRead: searchResults.meta?.rows_read ?? 0,
-        d1Duration: searchResults.meta?.duration ?? 0,
-        r2Fetches: 0,
-        r2Duration: 0,
-      },
+      meta: searchMeta(found, finder.backend, 0, 0),
     };
   }
 
-  // Streets are already ranked by SQL (FTS rank + number range + exact match bonuses)
-  const matchedStreets = searchResults.results;
+  const matchedStreets = found.rows;
 
   // Build street results
   const streets: StreetResult[] = matchedStreets.slice(0, limit).map((r) => ({
@@ -374,7 +286,7 @@ export async function executeSearch(
       localityName: r.locality_name,
       state: r.state,
       postcode: r.postcode,
-    }, q),
+    }, highlightQuery(q, r)),
     streetName: r.street_name,
     locality: r.locality_name,
     state: r.state,
@@ -447,6 +359,7 @@ export async function executeSearch(
     localityName: string;
     state: string;
     postcode: string | null;
+    highlightQuery: string;
     score: number;
   }
 
@@ -489,6 +402,7 @@ export async function executeSearch(
           localityName: street.locality_name,
           state: street.state,
           postcode: street.postcode,
+          highlightQuery: highlightQuery(q, street),
           score,
         });
       }
@@ -534,17 +448,16 @@ export async function executeSearch(
       state: a.state,
       postcode: a.postcode,
       displayPrefix: a.displayPrefix,
-    }, q),
+    }, a.highlightQuery),
     streetId: a.streetId,
   }));
 
   return {
-    body: { streets, addresses },
-    meta: {
-      d1RowsRead: searchResults.meta?.rows_read ?? 0,
-      d1Duration: searchResults.meta?.duration ?? 0,
-      r2Fetches: fetchEntries.length,
-      r2Duration: s3Duration,
+    body: {
+      streets,
+      addresses,
+      ...(found.corrections ? { corrections: found.corrections } : {}),
     },
+    meta: searchMeta(found, finder.backend, fetchEntries.length, s3Duration),
   };
 }

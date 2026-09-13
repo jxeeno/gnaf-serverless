@@ -222,3 +222,47 @@ export interface AddressResponse {
   };
   overlays?: Record<string, OverlayResult>;
 }
+
+/** A street+locality entry built by the search index pipeline */
+export interface StreetEntry {
+  id: number;
+  display: string;
+  display_search: string;
+  street_key: string;
+  shard_prefix: string;
+  street_name: string;
+  street_type: string;
+  street_suffix: string;
+  locality_name: string;
+  state: string;
+  postcode: string;
+  address_count: number;
+  digit_shards: string | null; // JSON object or null
+  num_min: number | null;
+  num_max: number | null;
+  flat_min: number | null;
+  flat_max: number | null;
+}
+
+/** A street row as returned by a street finder (same shape as the D1 `streets` table) */
+export interface StreetRow {
+  id: number;
+  display: string;
+  display_search: string;
+  street_key: string;
+  shard_prefix: string;
+  street_name: string;
+  street_type: string | null;
+  street_suffix: string | null;
+  locality_name: string;
+  state: string;
+  postcode: string | null;
+  address_count: number;
+  digit_shards: string | null;
+  num_min: number | null;
+  num_max: number | null;
+  flat_min: number | null;
+  flat_max: number | null;
+  /** Fuzzy matches only: query token → index word it was matched as (for highlighting) */
+  query_replacements?: Record<string, string>;
+}

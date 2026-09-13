@@ -2,15 +2,24 @@ import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import { DuckDBInstance } from "@duckdb/node-api";
+import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import {
   DUCKDB_PATH,
   SEARCH_INDEX_DIR,
+  SEARCH_R2_INDEX_DIR,
   SHARDS_DIR,
   SHARD_PREFIX_LENGTH,
 } from "./config.js";
 import { readAllRows } from "./shard.js";
-import type { StreetAddressEntry } from "../../src/shared/types.js";
+import { writeR2SearchIndex } from "./search-r2-index.js";
+import {
+  buildStreetDisplay,
+  buildStreetDisplaySearch,
+  buildStreetKey,
+} from "../../src/shared/street-index.js";
+import type { StreetAddressEntry, StreetEntry } from "../../src/shared/types.js";
+
+export type { StreetEntry };
 
 const STREET_SHARDS_DIR = path.join(SHARDS_DIR, "streets");
 
@@ -26,54 +35,6 @@ function md5hex(input: string): string {
   return createHash("md5").update(input).digest("hex");
 }
 
-/** Build a display string from street+locality components */
-function buildDisplay(row: {
-  street_name: string;
-  street_type: string;
-  street_suffix: string;
-  locality_name: string;
-  state: string;
-  postcode: string;
-}): string {
-  const parts = [row.street_name];
-  if (row.street_type) parts[0] += ` ${row.street_type}`;
-  if (row.street_suffix) parts[0] += ` ${row.street_suffix}`;
-  parts.push(row.locality_name);
-  parts.push(row.state);
-  if (row.postcode) parts.push(row.postcode);
-  return parts.join(", ");
-}
-
-/** Build a display_search string using full-form street types and suffixes for better FTS prefix matching */
-function buildDisplaySearch(row: {
-  street_name: string;
-  street_type_full: string;
-  street_suffix_full: string;
-  locality_name: string;
-  state: string;
-  postcode: string;
-}): string {
-  const parts = [row.street_name];
-  if (row.street_type_full) parts[0] += ` ${row.street_type_full}`;
-  if (row.street_suffix_full) parts[0] += ` ${row.street_suffix_full}`;
-  parts.push(row.locality_name);
-  parts.push(row.state);
-  if (row.postcode) parts.push(row.postcode);
-  return parts.join(", ").replace(/'/g, "");
-}
-
-/** Build a street key from components (same format used for S3 shard lookup) */
-function buildStreetKey(
-  streetName: string,
-  streetType: string,
-  streetSuffix: string,
-  localityName: string,
-  state: string,
-  postcode: string
-): string {
-  return `${streetName}|${streetType}|${streetSuffix}|${localityName}|${state}|${postcode}`;
-}
-
 /** Format elapsed time as "Xs" or "Xm Ys" */
 function elapsed(startMs: number): string {
   const s = ((Date.now() - startMs) / 1000) | 0;
@@ -81,26 +42,6 @@ function elapsed(startMs: number): string {
 }
 
 const INSERT_BATCH_SIZE = 200;
-
-export interface StreetEntry {
-  id: number;
-  display: string;
-  display_search: string;
-  street_key: string;
-  shard_prefix: string;
-  street_name: string;
-  street_type: string;
-  street_suffix: string;
-  locality_name: string;
-  state: string;
-  postcode: string;
-  address_count: number;
-  digit_shards: string | null; // JSON object or null
-  num_min: number | null;
-  num_max: number | null;
-  flat_min: number | null;
-  flat_max: number | null;
-}
 
 /**
  * SQL expression that replicates buildAddressPrefix() from address-format.ts.
@@ -170,21 +111,11 @@ SELECT
   ), ', ') AS display_prefix
 FROM base`;
 
-export async function generateSearchIndex(): Promise<void> {
-  const t0 = Date.now();
-  console.log(`Opening DuckDB at ${DUCKDB_PATH}...`);
-  const instance = await DuckDBInstance.create(DUCKDB_PATH);
-  const conn = await instance.connect();
-
-  await conn.run("SET memory_limit = '3GB'");
-  await conn.run("SET temp_directory = '/tmp/duckdb_temp'");
-
-  await fsp.mkdir(SHARDS_DIR, { recursive: true });
-  await fsp.mkdir(STREET_SHARDS_DIR, { recursive: true });
-
-  // --- Part 1: Build street entries ---
-
-  console.log("Querying unique street+locality combinations...");
+/**
+ * Query unique street+locality combinations from the addresses table and build
+ * street entries (ids assigned in order; digit_shards is filled in later).
+ */
+export async function queryStreetEntries(conn: DuckDBConnection): Promise<StreetEntry[]> {
   const streetResult = await conn.run(`
     SELECT
       street_name,
@@ -206,14 +137,8 @@ export async function generateSearchIndex(): Promise<void> {
     ORDER BY state, locality_name, street_name
   `);
   const streetRows = await readAllRows(streetResult);
-  console.log(`  Found ${streetRows.length} unique street+locality combinations (${elapsed(t0)})`);
 
-  // Build street entries (without digit_shards yet — computed during shard generation)
-  const streets: StreetEntry[] = [];
-  const streetKeyToId = new Map<string, number>();
-
-  for (let i = 0; i < streetRows.length; i++) {
-    const row = streetRows[i];
+  return streetRows.map((row, i) => {
     const sName = row.street_name as string;
     const sType = row.street_type as string;
     const sTypeFull = row.street_type_full as string;
@@ -223,11 +148,10 @@ export async function generateSearchIndex(): Promise<void> {
     const st = row.state as string;
     const pc = row.postcode as string;
     const streetKey = buildStreetKey(sName, sType, sSuffix, locName, st, pc);
-    const id = i + 1;
 
-    streets.push({
-      id,
-      display: buildDisplay({
+    return {
+      id: i + 1,
+      display: buildStreetDisplay({
         street_name: sName,
         street_type: sType,
         street_suffix: sSuffix,
@@ -235,7 +159,7 @@ export async function generateSearchIndex(): Promise<void> {
         state: st,
         postcode: pc,
       }),
-      display_search: buildDisplaySearch({
+      display_search: buildStreetDisplaySearch({
         street_name: sName,
         street_type_full: sTypeFull,
         street_suffix_full: sSuffixFull,
@@ -257,10 +181,94 @@ export async function generateSearchIndex(): Promise<void> {
       num_max: row.num_max != null ? Number(row.num_max) : null,
       flat_min: row.flat_min != null ? Number(row.flat_min) : null,
       flat_max: row.flat_max != null ? Number(row.flat_max) : null,
-    });
+    };
+  });
+}
 
-    streetKeyToId.set(streetKey, id);
+/** Build the D1 search index SQL (streets table + FTS5 index) */
+export function buildSearchIndexSql(streets: StreetEntry[]): string {
+  const sqlStatements: string[] = [];
+
+  // Drop existing tables (for rebuilds)
+  sqlStatements.push("DROP TABLE IF EXISTS streets_fts;");
+  sqlStatements.push("DROP TABLE IF EXISTS street_pids;"); // clean up old table if present
+  sqlStatements.push("DROP TABLE IF EXISTS streets;");
+
+  // Create streets table
+  sqlStatements.push(`CREATE TABLE streets (
+  id INTEGER PRIMARY KEY,
+  display TEXT NOT NULL,
+  display_search TEXT NOT NULL,
+  street_key TEXT NOT NULL,
+  shard_prefix TEXT NOT NULL,
+  street_name TEXT NOT NULL,
+  street_type TEXT,
+  street_suffix TEXT,
+  locality_name TEXT NOT NULL,
+  state TEXT NOT NULL,
+  postcode TEXT,
+  address_count INTEGER NOT NULL,
+  digit_shards TEXT,
+  num_min INTEGER,
+  num_max INTEGER,
+  flat_min INTEGER,
+  flat_max INTEGER
+);`);
+
+  // Batch INSERT for streets
+  for (let i = 0; i < streets.length; i += INSERT_BATCH_SIZE) {
+    const batch = streets.slice(i, i + INSERT_BATCH_SIZE);
+    const values = batch
+      .map(
+        (s) =>
+          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.display_search)}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"},${s.num_min ?? "NULL"},${s.num_max ?? "NULL"},${s.flat_min ?? "NULL"},${s.flat_max ?? "NULL"})`
+      )
+      .join(",\n");
+    sqlStatements.push(
+      `INSERT INTO streets (id,display,display_search,street_key,shard_prefix,street_name,street_type,street_suffix,locality_name,state,postcode,address_count,digit_shards,num_min,num_max,flat_min,flat_max) VALUES\n${values};`
+    );
   }
+
+  // Index on street_name for efficient LIKE prefix queries (used for short single-token searches)
+  sqlStatements.push(
+    `CREATE INDEX idx_streets_name ON streets (street_name);`
+  );
+
+  // Create FTS5 virtual table with external content
+  // Uses display_search (apostrophes stripped) so "O'DEA" → "ODEA" matches search queries
+  sqlStatements.push(`CREATE VIRTUAL TABLE streets_fts USING fts5(
+  display_search,
+  content='streets',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);`);
+
+  // Rebuild FTS5 index from content table
+  sqlStatements.push(
+    "INSERT INTO streets_fts(streets_fts) VALUES('rebuild');"
+  );
+
+  return sqlStatements.join("\n\n") + "\n";
+}
+
+export async function generateSearchIndex(): Promise<void> {
+  const t0 = Date.now();
+  console.log(`Opening DuckDB at ${DUCKDB_PATH}...`);
+  const instance = await DuckDBInstance.create(DUCKDB_PATH);
+  const conn = await instance.connect();
+
+  await conn.run("SET memory_limit = '3GB'");
+  await conn.run("SET temp_directory = '/tmp/duckdb_temp'");
+
+  await fsp.mkdir(SHARDS_DIR, { recursive: true });
+  await fsp.mkdir(STREET_SHARDS_DIR, { recursive: true });
+
+  // --- Part 1: Build street entries ---
+
+  console.log("Querying unique street+locality combinations...");
+  const streets = await queryStreetEntries(conn);
+  console.log(`  Found ${streets.length} unique street+locality combinations (${elapsed(t0)})`);
+  const streetKeyToId = new Map(streets.map((s) => [s.street_key, s.id]));
 
   // --- Part 2: Generate street S3 shards ---
   // Compute display_prefix in DuckDB SQL, then stream results in a single query
@@ -423,81 +431,17 @@ export async function generateSearchIndex(): Promise<void> {
   }
   console.log(`  ${shardFilesWritten} street shard files written (${elapsed(t0)})`);
 
-  // --- Part 3: Generate D1 SQL (chunked into multiple files) ---
+  // --- Part 3: Generate D1 SQL ---
 
   console.log("Generating search index SQL...");
-
-  // Collect all SQL statements
-  const sqlStatements: string[] = [];
-
-  // Drop existing tables (for rebuilds)
-  sqlStatements.push("DROP TABLE IF EXISTS streets_fts;");
-  sqlStatements.push("DROP TABLE IF EXISTS street_pids;"); // clean up old table if present
-  sqlStatements.push("DROP TABLE IF EXISTS streets;");
-
-  // Create streets table
-  sqlStatements.push(`CREATE TABLE streets (
-  id INTEGER PRIMARY KEY,
-  display TEXT NOT NULL,
-  display_search TEXT NOT NULL,
-  street_key TEXT NOT NULL,
-  shard_prefix TEXT NOT NULL,
-  street_name TEXT NOT NULL,
-  street_type TEXT,
-  street_suffix TEXT,
-  locality_name TEXT NOT NULL,
-  state TEXT NOT NULL,
-  postcode TEXT,
-  address_count INTEGER NOT NULL,
-  digit_shards TEXT,
-  num_min INTEGER,
-  num_max INTEGER,
-  flat_min INTEGER,
-  flat_max INTEGER
-);`);
-
-  // Batch INSERT for streets
-  for (let i = 0; i < streets.length; i += INSERT_BATCH_SIZE) {
-    const batch = streets.slice(i, i + INSERT_BATCH_SIZE);
-    const values = batch
-      .map(
-        (s) =>
-          `(${s.id},'${sqlEscape(s.display)}','${sqlEscape(s.display_search)}','${sqlEscape(s.street_key)}','${sqlEscape(s.shard_prefix)}','${sqlEscape(s.street_name)}',${s.street_type ? `'${sqlEscape(s.street_type)}'` : "NULL"},${s.street_suffix ? `'${sqlEscape(s.street_suffix)}'` : "NULL"},'${sqlEscape(s.locality_name)}','${sqlEscape(s.state)}',${s.postcode ? `'${sqlEscape(s.postcode)}'` : "NULL"},${s.address_count},${s.digit_shards ? `'${sqlEscape(s.digit_shards)}'` : "NULL"},${s.num_min ?? "NULL"},${s.num_max ?? "NULL"},${s.flat_min ?? "NULL"},${s.flat_max ?? "NULL"})`
-      )
-      .join(",\n");
-    sqlStatements.push(
-      `INSERT INTO streets (id,display,display_search,street_key,shard_prefix,street_name,street_type,street_suffix,locality_name,state,postcode,address_count,digit_shards,num_min,num_max,flat_min,flat_max) VALUES\n${values};`
-    );
-  }
-
-  // Index on street_name for efficient LIKE prefix queries (used for short single-token searches)
-  sqlStatements.push(
-    `CREATE INDEX idx_streets_name ON streets (street_name);`
-  );
-
-  // Create FTS5 virtual table with external content
-  // Uses display_search (apostrophes stripped) so "O'DEA" → "ODEA" matches search queries
-  sqlStatements.push(`CREATE VIRTUAL TABLE streets_fts USING fts5(
-  display_search,
-  content='streets',
-  content_rowid='id',
-  tokenize='unicode61 remove_diacritics 2'
-);`);
-
-  // Rebuild FTS5 index from content table
-  sqlStatements.push(
-    "INSERT INTO streets_fts(streets_fts) VALUES('rebuild');"
-  );
+  const content = buildSearchIndexSql(streets);
 
   // Write single SQL file (001.sql for backwards compatibility)
   await fsp.rm(SEARCH_INDEX_DIR, { recursive: true, force: true });
   await fsp.mkdir(SEARCH_INDEX_DIR, { recursive: true });
-
-  const content = sqlStatements.join("\n\n") + "\n";
   await fsp.writeFile(path.join(SEARCH_INDEX_DIR, "001.sql"), content);
-  const totalBytes = Buffer.byteLength(content);
 
-  const totalMb = (totalBytes / 1024 / 1024).toFixed(1);
+  const totalMb = (Buffer.byteLength(content) / 1024 / 1024).toFixed(1);
   console.log(
     `Search index SQL written to ${SEARCH_INDEX_DIR}/001.sql (${totalMb} MB, ${streets.length} streets)`
   );
@@ -506,6 +450,10 @@ export async function generateSearchIndex(): Promise<void> {
   const streetsJsonPath = path.join(SHARDS_DIR, "streets.json");
   await fsp.writeFile(streetsJsonPath, JSON.stringify(streets));
   console.log(`Streets JSON written to ${streetsJsonPath} (${streets.length} entries)`);
+
+  // --- Part 4: Static R2 search index (alternative to D1) ---
+
+  await writeR2SearchIndex(streets, SEARCH_R2_INDEX_DIR);
 
   console.log(`Search index generation complete (${elapsed(t0)})`);
 

@@ -5,6 +5,25 @@ import {
   LEVEL_KEYWORDS,
 } from "./synonyms.js";
 import type { StreetAddressEntry } from "./types.js";
+import { tokenizeIndexText } from "./index-tokenizer.js";
+
+/**
+ * One way a query token can match a street: a sequence of index words (a phrase
+ * when there is more than one), where the last word is a prefix if `prefix` is set.
+ */
+export interface SearchAlternative {
+  words: string[];
+  prefix: boolean;
+  /** Ranking penalty, set on fuzzy corrections */
+  penalty?: number;
+}
+
+/** A text token and the alternatives that satisfy it (one AND term of `ftsQuery`) */
+export interface SearchClause {
+  token: string;
+  isLast: boolean;
+  alternatives: SearchAlternative[];
+}
 
 export interface ParsedQuery {
   /** Original numeric tokens (pure digit strings or digit+alpha like "2A") */
@@ -25,6 +44,8 @@ export interface ParsedQuery {
   flatDisplayHint: string | null;
   /** FTS5 query string with synonym expansion */
   ftsQuery: string;
+  /** Structured form of `ftsQuery`: one clause per text token, all of which must match */
+  clauses: SearchClause[];
 }
 
 /**
@@ -193,6 +214,11 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
 
   // Expand text tokens with synonyms and build FTS5 query
   // Resolve abbreviations to full forms since the FTS index stores full-form street types
+  const clauses: SearchClause[] = [];
+  const toAlternative = (s: string, prefix: boolean): SearchAlternative => ({
+    words: tokenizeIndexText(s),
+    prefix,
+  });
   const ftsTokens = textTokens.map((t, i) => {
     const syns = SYNONYMS[t] ?? [t];
     const isLast = i === textTokens.length - 1;
@@ -202,6 +228,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
       // Resolved full forms get exact match (abbreviation definitively resolved).
       // Original token gets prefix search (could be start of any word, e.g. "AV" → AVALON).
       const parts: string[] = [];
+      const alternatives: SearchAlternative[] = [];
       const seen = new Set<string>();
       for (const s of syns) {
         const full = ABBREVIATION_TO_FULL[s];
@@ -209,11 +236,14 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
           seen.add(full);
           // Quote multi-word resolved forms (e.g., "NORTH EAST" from NE)
           parts.push(full.includes(" ") ? `"${full}"` : full);
+          alternatives.push(toAlternative(full, false));
         }
       }
       if (!seen.has(t)) {
         parts.push(`"${t}"*`); // prefix — quoted to avoid FTS5 keyword conflicts (e.g. OR, AND, NOT)
+        alternatives.push(toAlternative(t, true));
       }
+      clauses.push({ token: t, isLast, alternatives: alternatives.filter((a) => a.words.length > 0) });
       return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
     } else {
       // Exact match: use resolved full forms + keep original token
@@ -221,6 +251,11 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
       // with an abbreviation, e.g. "LYNN" the street vs "LYNN" abbrev for LYNNE)
       const all = [...new Set([...resolved, t])];
       const parts = all.map((s) => `"${s}"`);
+      clauses.push({
+        token: t,
+        isLast,
+        alternatives: all.map((s) => toAlternative(s, false)).filter((a) => a.words.length > 0),
+      });
       return parts.length > 1 ? `(${parts.join(" OR ")})` : parts[0];
     }
   });
@@ -236,6 +271,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
     streetSuffix,
     flatDisplayHint,
     ftsQuery,
+    clauses,
   };
 }
 

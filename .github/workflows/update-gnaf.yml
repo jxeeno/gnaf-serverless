@@ -223,6 +223,7 @@ jobs:
           path: |
             data/shards/streets/
             data/shards/search-index/
+            data/shards/search/
             data/shards/precomputed/
           retention-days: 1
           compression-level: 1

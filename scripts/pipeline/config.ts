@@ -21,6 +21,8 @@ export const ADDRESS_SHARDS_DIR = path.join(SHARDS_DIR, "addresses");
 export const LOTDP_SHARDS_DIR = path.join(SHARDS_DIR, "lotdp");
 export const SEARCH_INDEX_SQL_PATH = path.join(SHARDS_DIR, "search-index.sql");
 export const SEARCH_INDEX_DIR = path.join(SHARDS_DIR, "search-index");
+/** Static street search index for R2 (alternative to the D1 search index) */
+export const SEARCH_R2_INDEX_DIR = path.join(SHARDS_DIR, "search");
 export const PRECOMPUTED_DIR = path.join(SHARDS_DIR, "precomputed");
 
 export const S3_ENDPOINT = process.env.S3_ENDPOINT ?? "";
