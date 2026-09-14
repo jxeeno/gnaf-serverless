@@ -1,5 +1,5 @@
 import { createIndexStreetFinder, type IndexLoader } from "../shared/street-index.js";
-import type { StreetFinder } from "../shared/street-finder.js";
+import type { IndexCacheStats, StreetFinder, StreetFinderResult } from "../shared/street-finder.js";
 import { fetchObjectText } from "./r2.js";
 
 /** Parsed index files kept in isolate memory between requests, keyed by R2 key */
@@ -19,24 +19,28 @@ function rememberFile(r2Key: string, value: unknown): void {
 async function loadIndexFile(
   bucket: R2Bucket,
   r2Key: string,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  stats: IndexCacheStats
 ): Promise<unknown> {
   if (memoryCache.has(r2Key)) {
     const value = memoryCache.get(r2Key);
     rememberFile(r2Key, value);
+    stats.memory++;
     return value;
   }
 
   const cacheKey = new Request(`https://r2-cache/${r2Key}`);
   const cache = caches.default;
   const cached = await cache.match(cacheKey);
-  let value: unknown;
+  let json: string;
   if (cached) {
-    value = await cached.json();
+    json = await cached.text();
+    stats.cacheApi++;
   } else {
-    const json = await fetchObjectText(bucket, r2Key);
-    if (json == null) return null;
-    value = JSON.parse(json);
+    const text = await fetchObjectText(bucket, r2Key);
+    if (text == null) return null;
+    json = text;
+    stats.r2++;
     const cacheResponse = new Response(json, {
       headers: {
         "Content-Type": "application/json",
@@ -46,6 +50,8 @@ async function loadIndexFile(
     ctx.waitUntil(cache.put(cacheKey, cacheResponse));
   }
 
+  stats.bytes += json.length;
+  const value = JSON.parse(json);
   rememberFile(r2Key, value);
   return value;
 }
@@ -56,9 +62,20 @@ export function createR2StreetFinder(
   version: string,
   ctx: ExecutionContext
 ): StreetFinder {
+  const stats: IndexCacheStats = { memory: 0, cacheApi: 0, r2: 0, bytes: 0 };
   const loader: IndexLoader = {
     load: async <T>(path: string) =>
-      (await loadIndexFile(bucket, `gnaf/${version}/${path}`, ctx)) as T | null,
+      (await loadIndexFile(bucket, `gnaf/${version}/${path}`, ctx, stats)) as T | null,
   };
-  return createIndexStreetFinder(loader);
+  const finder = createIndexStreetFinder(loader);
+  const withStats = async (result: Promise<StreetFinderResult>): Promise<StreetFinderResult> => ({
+    ...(await result),
+    indexCache: { ...stats },
+  });
+
+  return {
+    ...finder,
+    findByQuery: (parsed, streetLimit) => withStats(finder.findByQuery(parsed, streetLimit)),
+    findByNumber: (num, streetLimit) => withStats(finder.findByNumber(num, streetLimit)),
+  };
 }

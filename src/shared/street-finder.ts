@@ -10,6 +10,18 @@ export interface QueryCorrection {
   replacements: string[];
 }
 
+/** Where index files for one search came from (R2 index only) */
+export interface IndexCacheStats {
+  /** Parsed files reused from isolate memory */
+  memory: number;
+  /** Files read from the Cache API */
+  cacheApi: number;
+  /** Files read from R2 */
+  r2: number;
+  /** JSON bytes parsed (Cache API and R2 reads) */
+  bytes: number;
+}
+
 export interface StreetFinderResult {
   /** Ranked streets, best first */
   rows: StreetRow[];
@@ -20,6 +32,7 @@ export interface StreetFinderResult {
   fetches: number;
   /** Set when results come from fuzzy-corrected tokens */
   corrections?: QueryCorrection[];
+  indexCache?: IndexCacheStats;
 }
 
 /**

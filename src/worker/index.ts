@@ -194,6 +194,11 @@ app.get("/api/addresses/search", async (c) => {
     "X-Street-Index-Fetches": String(result.meta.streetFetches),
     "X-Street-Index-Rows": String(result.meta.backend === "r2" ? result.meta.streetRowsRead : 0),
     "X-Street-Index-Duration-Ms": String(result.meta.backend === "r2" ? result.meta.streetDuration : 0),
+    "X-Street-Lookup-Ms": String(result.meta.streetLookupMs),
+    "X-Street-Index-Sources": result.meta.indexCache
+      ? `memory=${result.meta.indexCache.memory},cache=${result.meta.indexCache.cacheApi},r2=${result.meta.indexCache.r2}`
+      : "",
+    "X-Street-Index-Bytes": String(result.meta.indexCache?.bytes ?? 0),
     "X-R2-Fetches": String(result.meta.r2Fetches),
     "X-R2-Duration-Ms": String(result.meta.r2Duration),
   });

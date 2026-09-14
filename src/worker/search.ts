@@ -5,6 +5,7 @@ import {
 } from "../shared/search-query.js";
 import { reconstructSla } from "../shared/address-format.js";
 import type {
+  IndexCacheStats,
   QueryCorrection,
   SearchBackend,
   StreetFinder,
@@ -47,6 +48,9 @@ export interface SearchMeta {
   streetDuration: number;
   /** Index files requested for street lookup (R2 index only) */
   streetFetches: number;
+  /** Wall-clock time for street lookup, including network time to D1 or R2 */
+  streetLookupMs: number;
+  indexCache?: IndexCacheStats;
   /** Street address shard fetches */
   r2Fetches: number;
   r2Duration: number;
@@ -78,6 +82,7 @@ export function entryToSla(entry: StreetAddressEntry, street: StreetRow): string
 function searchMeta(
   found: StreetFinderResult,
   backend: SearchBackend,
+  streetLookupMs: number,
   r2Fetches: number,
   r2Duration: number
 ): SearchMeta {
@@ -86,6 +91,8 @@ function searchMeta(
     streetRowsRead: found.rowsRead,
     streetDuration: found.durationMs,
     streetFetches: found.fetches,
+    streetLookupMs,
+    ...(found.indexCache ? { indexCache: found.indexCache } : {}),
     r2Fetches,
     r2Duration,
   };
@@ -114,12 +121,14 @@ async function executeNumberOnlySearch(
   ctx: ExecutionContext
 ): Promise<SearchResponse> {
   const streetLimit = Math.max(30, limit * 3);
+  const lookupStart = Date.now();
   const found = await finder.findByNumber(num, streetLimit);
+  const lookupMs = Date.now() - lookupStart;
 
   if (!found.rows.length) {
     return {
       body: { streets: [], addresses: [] },
-      meta: searchMeta(found, finder.backend, 0, 0),
+      meta: searchMeta(found, finder.backend, lookupMs, 0, 0),
     };
   }
 
@@ -241,7 +250,7 @@ async function executeNumberOnlySearch(
 
   return {
     body: { streets, addresses },
-    meta: searchMeta(found, finder.backend, fetchEntries.length, s3Duration),
+    meta: searchMeta(found, finder.backend, lookupMs, fetchEntries.length, s3Duration),
   };
 }
 
@@ -274,12 +283,14 @@ export async function executeSearch(
   // Ranking favours exact street name matches and streets whose number/flat
   // ranges include the queried numbers, so fetch extra streets when numbers are present.
   const streetLimit = numTokens.length > 0 ? Math.max(30, limit * 3) : limit;
+  const lookupStart = Date.now();
   const found = await finder.findByQuery(parsed, streetLimit);
+  const lookupMs = Date.now() - lookupStart;
 
   if (!found.rows.length) {
     return {
       body: { streets: [], addresses: [] },
-      meta: searchMeta(found, finder.backend, 0, 0),
+      meta: searchMeta(found, finder.backend, lookupMs, 0, 0),
     };
   }
 
@@ -471,6 +482,6 @@ export async function executeSearch(
       addresses,
       ...(found.corrections ? { corrections: found.corrections } : {}),
     },
-    meta: searchMeta(found, finder.backend, fetchEntries.length, s3Duration),
+    meta: searchMeta(found, finder.backend, lookupMs, fetchEntries.length, s3Duration),
   };
 }
