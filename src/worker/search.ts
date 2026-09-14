@@ -43,6 +43,13 @@ export interface AddressResult {
   sla: string;
   highlight: [number, number][];
   streetId: number;
+  /** Principal address PID, when this address is a synonym alias */
+  aliasOf?: string;
+}
+
+/** When scores tie, list principal addresses before aliases */
+function principalFirst(a: { aliasOf?: string }, b: { aliasOf?: string }): number {
+  return (a.aliasOf ? 1 : 0) - (b.aliasOf ? 1 : 0);
 }
 
 export interface SearchMeta {
@@ -159,6 +166,7 @@ async function executeNumberOnlySearch(
     pid: string;
     sla: string;
     streetId: number;
+    aliasOf?: string;
     score: number;
   }
 
@@ -188,13 +196,14 @@ async function executeNumberOnlySearch(
           pid: entry.p,
           sla: entryToSla(entry, street),
           streetId: street.id,
+          aliasOf: entry.pp,
           score,
         });
       }
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || principalFirst(a, b));
 
   // Diversify: 1 per street first, then backfill
   const seenStreets = new Set<number>();
@@ -216,6 +225,7 @@ async function executeNumberOnlySearch(
   const addresses: AddressResult[] = results.map((a) => ({
     pid: a.pid,
     sla: a.sla,
+    ...(a.aliasOf ? { aliasOf: a.aliasOf } : {}),
     highlight: computeHighlightRanges(a.sla, {
       streetName: "",
       localityName: "",
@@ -447,6 +457,7 @@ export async function executeSearch(
     localityName: string;
     state: string;
     postcode: string | null;
+    aliasOf?: string;
     score: number;
   }
 
@@ -489,6 +500,7 @@ export async function executeSearch(
           localityName: street.locality_name,
           state: street.state,
           postcode: street.postcode,
+          aliasOf: entry.pp,
           score,
         });
       }
@@ -496,7 +508,7 @@ export async function executeSearch(
   }
 
   // Sort by score descending, take top results
-  scoredAddresses.sort((a, b) => b.score - a.score);
+  scoredAddresses.sort((a, b) => b.score - a.score || principalFirst(a, b));
 
   // When no numbers, first pick 1 per street for variety, then backfill remaining
   // slots with additional addresses from the same streets (highest scored first).
@@ -526,6 +538,7 @@ export async function executeSearch(
   const addresses: AddressResult[] = addressResults.map((a) => ({
     pid: a.pid,
     sla: a.sla,
+    ...(a.aliasOf ? { aliasOf: a.aliasOf } : {}),
     highlight: computeHighlightRanges(a.sla, {
       streetName: a.streetName,
       streetType: a.streetType,
