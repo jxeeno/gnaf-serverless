@@ -17,6 +17,12 @@ const STREET_SHARDS_DIR = path.join(SHARDS_DIR, "streets");
 /** Threshold: streets with more than this many addresses get digit sub-sharding */
 const DIGIT_SHARD_THRESHOLD = 100;
 
+/**
+ * Addresses included in search: principals plus synonym (SYN) aliases, so an
+ * alternative address for a property (e.g. a second street frontage) can be found.
+ */
+const SEARCHABLE_ADDRESSES = "(alias_principal = 'P' OR alias_type_code = 'SYN')";
+
 /** Escape a string for use in a SQL single-quoted literal */
 function sqlEscape(val: string): string {
   return val.replace(/'/g, "''");
@@ -115,6 +121,7 @@ const DISPLAY_PREFIX_SQL = `
 WITH base AS (
   SELECT
     gnaf_pid,
+    principal_pid,
     _street_key,
     _street_shard,
     CAST(number_first AS INTEGER) AS number_first,
@@ -154,10 +161,11 @@ WITH base AS (
         COALESCE(lot_number_suffix, '')
       ELSE '' END AS _street_num
   FROM addresses
-  WHERE alias_principal = 'P'
+  WHERE ${SEARCHABLE_ADDRESSES}
 )
 SELECT
   gnaf_pid,
+  principal_pid,
   _street_key,
   _street_shard,
   number_first,
@@ -201,7 +209,7 @@ export async function generateSearchIndex(): Promise<void> {
       MIN(LEAST(CAST(flat_number AS INTEGER), CAST(level_number AS INTEGER))) AS flat_min,
       MAX(GREATEST(CAST(flat_number AS INTEGER), CAST(level_number AS INTEGER))) AS flat_max
     FROM addresses
-    WHERE alias_principal = 'P'
+    WHERE ${SEARCHABLE_ADDRESSES}
     GROUP BY street_name, street_type_abbrev, street_suffix_code, locality_name, state, postcode
     ORDER BY state, locality_name, street_name
   `);
@@ -290,7 +298,7 @@ export async function generateSearchIndex(): Promise<void> {
   // Stream all entries in a single ordered query
   console.log("Streaming street address entries...");
   const entryResult = await conn.run(`
-    SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number
+    SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number, principal_pid
     FROM _street_entries
     ORDER BY _street_key
   `);
@@ -310,6 +318,7 @@ export async function generateSearchIndex(): Promise<void> {
     const nlCol = chunk.getColumnVector(4);
     const fnCol = chunk.getColumnVector(5);
     const lnCol = chunk.getColumnVector(6);
+    const ppCol = chunk.getColumnVector(7);
 
     for (let i = 0; i < chunk.rowCount; i++) {
       const streetKey = skCol.getItem(i) as string;
@@ -325,6 +334,8 @@ export async function generateSearchIndex(): Promise<void> {
       if (nl != null) entry.n2 = nl;
       if (fn != null) entry.f = fn;
       if (ln != null) entry.l = ln;
+      const pp = ppCol.getItem(i) as string | null;
+      if (pp) entry.pp = pp;
 
       let arr = byStreetKey.get(streetKey);
       if (!arr) {
