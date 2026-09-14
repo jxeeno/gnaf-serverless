@@ -114,7 +114,7 @@ GET /api/addresses?lpid=CANB/GRIF/25/14     # ACT block/section
 
 #### Address aliases
 
-GNAF links alternate forms of an address (alias) to a canonical one (principal) via `ADDRESS_ALIAS`. Alias addresses can be fetched by PID but are not included in search results.
+GNAF links alternate forms of an address (alias) to a canonical one (principal) via `ADDRESS_ALIAS`. Synonym (`SYN`) aliases are included in search, and address results for them include `aliasOf` with the principal PID (when scores tie, the principal is listed first). Other alias types can be fetched by PID but aren't searched.
 
 An alias address includes the principal it belongs to:
 
