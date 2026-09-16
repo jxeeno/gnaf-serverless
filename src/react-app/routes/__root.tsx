@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
-import { MapPin, Github } from "lucide-react";
 import type { ShardMetadata } from "../../shared/types.js";
+import { Mark } from "../components/blade";
 
 export const Route = createRootRoute({
   component: RootLayout,
 });
+
+const REPO = "https://github.com/jxeeno/gnaf-serverless";
 
 function RootLayout() {
   const [metadata, setMetadata] = useState<ShardMetadata | null>(null);
@@ -13,48 +15,66 @@ function RootLayout() {
   useEffect(() => {
     fetch("/api/metadata")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (data) setMetadata(data); })
+      .then((data) => {
+        if (data) setMetadata(data);
+      })
       .catch(() => {});
   }, []);
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
-        <div className="mb-8 text-center">
-          <Link to="/" className="inline-flex items-center gap-2 mb-3 hover:opacity-80 transition-opacity">
-            <MapPin className="h-6 w-6 text-primary" />
-            <h1 className="text-2xl font-bold tracking-tight">GNAF Lookup</h1>
-          </Link>
-          <p className="text-sm text-muted-foreground">
-            Australian address lookup powered by the Geocoded National Address File
-          </p>
-          <a
-            href="https://github.com/jxeeno/gnaf-serverless"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 mt-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Github className="h-3.5 w-3.5" />
-            View on GitHub
-          </a>
-        </div>
-        <Outlet />
-        {metadata && (
-          <footer className="mt-12 pt-4 border-t border-border text-center text-[11px] text-muted-foreground space-y-1">
-            <p>
-              {metadata.gnafReleaseName ? `G-NAF ${metadata.gnafReleaseName}` : metadata.version}
-              {" · "}
-              {metadata.totalAddresses.toLocaleString()} addresses
-              {" · "}
-              {metadata.datum}
-            </p>
-            <p>
-              Data: <a href="https://data.gov.au/dataset/geocoded-national-address-file-g-naf" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors underline underline-offset-2">data.gov.au</a>
-              {" · "}
-              Built {new Date(metadata.date).toLocaleDateString("en-AU", { year: "numeric", month: "short", day: "numeric" })}
-            </p>
+    <div className="min-h-screen bg-cream-deep">
+      <div className="mx-auto w-full max-w-[940px] px-3 py-6 sm:px-5 sm:py-10">
+        <div className="border border-hairline bg-cream shadow-[0_24px_60px_-30px_rgba(20,30,25,0.45)]">
+          <header className="flex flex-wrap items-center justify-between gap-3 bg-ink px-4 py-3 text-[12.5px] font-semibold uppercase tracking-[0.1em] text-cream sm:px-6">
+            <Link to="/" className="inline-flex items-center gap-2.5 text-cream no-underline">
+              <Mark />
+              <span className="font-extrabold tracking-[0.06em]">gnaf-serverless</span>
+            </Link>
+            <nav className="flex gap-4 text-[#d9d5c8] sm:gap-5">
+              <a href={`${REPO}#api`} className="text-[#d9d5c8] no-underline hover:text-white">
+                API
+              </a>
+              <a href={`${REPO}#data-pipeline`} className="text-[#d9d5c8] no-underline hover:text-white">
+                Pipeline
+              </a>
+              <a href={REPO} className="text-signal no-underline hover:text-white">
+                GitHub ↗
+              </a>
+            </nav>
+          </header>
+
+          <Outlet />
+
+          <footer className="flex flex-col gap-3.5 bg-ink px-4 py-5 text-slate-text sm:px-6">
+            <div className="h-px bg-slate-line" />
+            <div className="grid gap-4 text-[11.5px] leading-[1.65] sm:grid-cols-[1.5fr_1fr] sm:gap-6">
+              <p className="m-0">
+                Incorporates or developed using G-NAF © Geoscape Australia, licensed by the
+                Commonwealth of Australia under the Geocoded National Address File (G-NAF) End User
+                Licence Agreement.
+                {metadata && (
+                  <>
+                    {" "}
+                    Release: {metadata.gnafReleaseName ?? metadata.version} · {metadata.datum} ·{" "}
+                    {metadata.totalAddresses.toLocaleString()} addresses.
+                  </>
+                )}{" "}
+                Source:{" "}
+                <a
+                  href="https://data.gov.au/dataset/geocoded-national-address-file-g-naf"
+                  className="text-signal no-underline hover:underline"
+                >
+                  data.gov.au
+                </a>
+                .
+              </p>
+              <p className="m-0">
+                Software © 2026 Kenneth Tsang, released under the MIT Licence. The MIT Licence covers
+                this code only — G-NAF data remains subject to its own End User Licence Agreement.
+              </p>
+            </div>
           </footer>
-        )}
+        </div>
       </div>
     </div>
   );

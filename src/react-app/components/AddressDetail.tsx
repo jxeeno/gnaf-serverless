@@ -1,13 +1,9 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { MapPin, FileJson, Table } from "lucide-react";
 import type { AddressResponse } from "../../shared/types";
 import { AddressMap } from "../AddressMap";
 import { useResolvedSlas } from "../useResolvedSlas";
+import { Blade, FieldRow, Pill, Plate } from "./blade";
 
 /**
  * Resolving each linked PID costs a request, and a handful of buildings have
@@ -15,15 +11,15 @@ import { useResolvedSlas } from "../useResolvedSlas";
  */
 const PAGE_SIZE = 50;
 
+export interface DetailTiming {
+  totalMs: number;
+}
+
 /**
  * A list of linked addresses (aliases, or the secondaries of a building). Shows
  * the PID immediately and fills in the address as each one resolves.
  */
-function LinkedAddressList({
-  items,
-}: {
-  items: { pid: string; label: string }[];
-}) {
+function LinkedAddressList({ items }: { items: { pid: string; label: string }[] }) {
   const [shown, setShown] = useState(PAGE_SIZE);
   const visible = useMemo(() => items.slice(0, shown), [items, shown]);
   const pids = useMemo(() => visible.map((i) => i.pid), [visible]);
@@ -32,49 +28,57 @@ function LinkedAddressList({
 
   return (
     <>
-      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        {visible.map((item) => (
-          <React.Fragment key={item.pid}>
-            <Link
-              to="/address/$gnafId"
-              params={{ gnafId: item.pid }}
-              className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground"
-            >
-              {item.pid}
-            </Link>
-            <span className="flex items-baseline gap-2 min-w-0">
-              <span className="truncate">
-                {slas[item.pid] === undefined ? (
-                  <span className="text-muted-foreground">Resolving…</span>
-                ) : slas[item.pid] === "" ? (
-                  <span className="text-muted-foreground">Unavailable</span>
-                ) : (
-                  slas[item.pid]
-                )}
-              </span>
-              <span className="text-xs text-muted-foreground shrink-0">
-                {item.label}
-              </span>
-            </span>
-          </React.Fragment>
-        ))}
-      </div>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+        {visible.map((item) => {
+          const sla = slas[item.pid];
+          return (
+            <li key={item.pid}>
+              <Link
+                to="/address/$gnafId"
+                params={{ gnafId: item.pid }}
+                className="plate-sm plate-press flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 text-ink no-underline"
+              >
+                <span className="min-w-0 flex-1 truncate text-[13px] font-bold uppercase">
+                  {sla === undefined ? (
+                    <span className="font-semibold normal-case text-ink-mute">Resolving…</span>
+                  ) : sla === "" ? (
+                    <span className="font-semibold normal-case text-ink-mute">Address unavailable</span>
+                  ) : (
+                    sla
+                  )}
+                </span>
+                <span className="font-mono text-[10px] text-ink-mute">{item.pid}</span>
+                <span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-ink-mute">
+                  {item.label}
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
       {remaining > 0 && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-3"
+        <button
+          type="button"
           onClick={() => setShown((n) => n + PAGE_SIZE)}
+          className="plate-press mt-2.5 inline-flex items-center rounded-lg border-[2.5px] border-ink bg-white px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em] shadow-[0_3px_0_#20241f]"
         >
-          Show {Math.min(PAGE_SIZE, remaining)} more ({remaining} remaining)
-        </Button>
+          Show {Math.min(PAGE_SIZE, remaining)} more · {remaining.toLocaleString()} left
+        </button>
       )}
     </>
   );
 }
 
-export function AddressDetail({ address }: { address: AddressResponse }) {
-  // The two single links in the header, resolved so the badges name an address
+export function AddressDetail({
+  address,
+  timing,
+}: {
+  address: AddressResponse;
+  timing?: DetailTiming;
+}) {
+  const [jsonOpen, setJsonOpen] = useState(false);
+
+  // The two single links in the header, resolved so they name an address
   // rather than just a PID.
   const headerPids = useMemo(
     () =>
@@ -85,283 +89,226 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
   );
   const headerSlas = useResolvedSlas(headerPids);
 
+  const geocode =
+    address.geocoding.geocodes.find((g) => g.default) ?? address.geocoding.geocodes[0];
+
+  // The blade carries the street line; everything else sits above it as context.
+  const bladeLine = address.mla[0] ?? address.sla;
+  const bladeContext = address.mla.slice(1).join(" · ");
+
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Badge variant="secondary" className="font-mono text-xs">{address.pid}</Badge>
-          {address.precedence && (
-            <Badge variant={address.precedence === "primary" ? "default" : "outline"}>
-              {address.precedence}
-            </Badge>
-          )}
-          {address.lpid && (
-            <Badge variant="outline" className="font-mono text-xs">Lot/DP: {address.lpid}</Badge>
-          )}
-          {address.alias && (
-            <Link to="/address/$gnafId" params={{ gnafId: address.alias.principalPid }}>
-              <Badge variant="outline" className="text-xs hover:bg-muted" title={address.alias.principalPid}>
-                Alias ({address.alias.type.name}) of{" "}
-                <span className="ml-1">
-                  {headerSlas[address.alias.principalPid] ||
-                    address.alias.principalPid}
-                </span>
-              </Badge>
-            </Link>
-          )}
-          {address.primary && (
-            <Link to="/address/$gnafId" params={{ gnafId: address.primary.pid }}>
-              <Badge variant="outline" className="text-xs hover:bg-muted" title={address.primary.pid}>
-                Primary:{" "}
-                <span className="ml-1">
-                  {headerSlas[address.primary.pid] || address.primary.pid}
-                </span>
-              </Badge>
-            </Link>
-          )}
-        </div>
-        <h2 className="text-xl font-semibold tracking-tight">{address.sla}</h2>
-        {address.ssla && (
-          <p className="text-sm text-muted-foreground">{address.ssla}</p>
+    <div>
+      <Blade context={bladeContext || undefined}>{bladeLine}</Blade>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Pill tone="mono">{address.pid}</Pill>
+        {address.precedence && (
+          <Pill tone={address.precedence === "primary" ? "signal" : "line"}>
+            {address.precedence}
+          </Pill>
+        )}
+        {address.lpid && <Pill>LPID {address.lpid}</Pill>}
+        <Pill>Geocode level {address.geocoding.level.code}</Pill>
+        <Pill>Confidence {address.structured.confidence}</Pill>
+        {address.alias && (
+          <Link
+            to="/address/$gnafId"
+            params={{ gnafId: address.alias.principalPid }}
+            title={address.alias.principalPid}
+            className="no-underline"
+          >
+            <Pill tone="signal">
+              {address.alias.type.name} of{" "}
+              {headerSlas[address.alias.principalPid] || address.alias.principalPid}
+            </Pill>
+          </Link>
+        )}
+        {address.primary && (
+          <Link
+            to="/address/$gnafId"
+            params={{ gnafId: address.primary.pid }}
+            title={address.primary.pid}
+            className="no-underline"
+          >
+            <Pill tone="signal">
+              Inside {headerSlas[address.primary.pid] || address.primary.pid}
+            </Pill>
+          </Link>
         )}
       </div>
 
-      <Tabs defaultValue="details" className="w-full">
-        <TabsList className="w-full grid grid-cols-3">
-          <TabsTrigger value="details" className="gap-1.5"><Table className="h-3.5 w-3.5" /> Details</TabsTrigger>
-          <TabsTrigger value="map" className="gap-1.5"><MapPin className="h-3.5 w-3.5" /> Map</TabsTrigger>
-          <TabsTrigger value="json" className="gap-1.5"><FileJson className="h-3.5 w-3.5" /> JSON</TabsTrigger>
-        </TabsList>
+      <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        {/* The map is the panel, not a tab behind one. */}
+        <div className="relative min-h-[300px] overflow-hidden rounded-xl border-[3px] border-ink shadow-[0_6px_0_#20241f]">
+          <AddressMap
+            latitude={geocode?.latitude}
+            longitude={geocode?.longitude}
+            label={address.sla}
+          />
+          {geocode && (
+            <div className="pointer-events-none absolute bottom-3 left-3 z-[500] rounded-md bg-ink px-2.5 py-1.5 font-mono text-[10px] tracking-[0.06em] text-cream">
+              {geocode.latitude.toFixed(6)}, {geocode.longitude.toFixed(6)} · {geocode.type.name}
+            </div>
+          )}
+        </div>
 
-        <TabsContent value="details" className="mt-4">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Address</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1">
-                {address.mla.map((line, i) => (
-                  <p key={i} className="text-sm font-medium">{line}</p>
-                ))}
-                {address.smla && (
-                  <div className="pt-2 mt-2 border-t">
-                    <p className="text-xs text-muted-foreground mb-1">Short form</p>
-                    {address.smla.map((line, i) => (
-                      <p key={i} className="text-sm">{line}</p>
+        <div className="flex flex-col gap-3.5">
+          <Plate title="Structured address">
+            <dl className="m-0 grid grid-cols-[88px_1fr] gap-x-2.5 gap-y-[7px] px-3.5 py-3">
+              {address.structured.buildingName && (
+                <FieldRow label="Building">{address.structured.buildingName}</FieldRow>
+              )}
+              {address.structured.flat && (
+                <FieldRow label="Flat">
+                  {address.structured.flat.type.name}{" "}
+                  {[
+                    address.structured.flat.prefix,
+                    address.structured.flat.number,
+                    address.structured.flat.suffix,
+                  ]
+                    .filter((v) => v != null)
+                    .join("")}
+                </FieldRow>
+              )}
+              {address.structured.level && (
+                <FieldRow label="Level">
+                  {address.structured.level.type.name}{" "}
+                  {[
+                    address.structured.level.prefix,
+                    address.structured.level.number,
+                    address.structured.level.suffix,
+                  ]
+                    .filter((v) => v != null)
+                    .join("")}
+                </FieldRow>
+              )}
+              {address.structured.number && (
+                <FieldRow label="Number">
+                  {[
+                    address.structured.number.prefix,
+                    address.structured.number.number,
+                    address.structured.number.suffix,
+                  ]
+                    .filter(Boolean)
+                    .join("")}
+                  {address.structured.number.last &&
+                    `–${[
+                      address.structured.number.last.prefix,
+                      address.structured.number.last.number,
+                      address.structured.number.last.suffix,
+                    ]
+                      .filter(Boolean)
+                      .join("")}`}
+                </FieldRow>
+              )}
+              {address.structured.lotNumber && (
+                <FieldRow label="Lot">
+                  {[
+                    address.structured.lotNumber.prefix,
+                    address.structured.lotNumber.number,
+                    address.structured.lotNumber.suffix,
+                  ]
+                    .filter(Boolean)
+                    .join("")}
+                </FieldRow>
+              )}
+              <FieldRow label="Street">
+                {address.structured.street.name}
+                {address.structured.street.type && ` · ${address.structured.street.type.name}`}
+                {address.structured.street.suffix && ` ${address.structured.street.suffix.name}`}
+              </FieldRow>
+              <FieldRow label="Locality">{address.structured.locality.name}</FieldRow>
+              <FieldRow label="Postcode">{address.structured.postcode ?? "—"}</FieldRow>
+              <FieldRow label="State">{address.structured.state.name}</FieldRow>
+            </dl>
+          </Plate>
+
+          {timing && (
+            <div className="flex items-stretch gap-3.5">
+              <div className="flex h-[104px] w-[104px] shrink-0 flex-col items-center justify-center rounded-full border-8 border-alarm bg-white shadow-[0_5px_0_#20241f]">
+                <div className="text-[26px] font-black leading-none">{timing.totalMs.toFixed(0)}</div>
+                <div className="text-[10px] font-extrabold tracking-[0.1em] text-ink-mute">MS TOTAL</div>
+              </div>
+              <div className="flex-1 rounded-xl bg-ink px-3.5 py-3 font-mono text-[11px] leading-[1.85] text-cream">
+                <div className="flex justify-between gap-3">
+                  <span className="text-[#a9aea6]">geocode</span>
+                  <span className="truncate">{geocode?.type.code ?? "—"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-[#a9aea6]">level</span>
+                  <span className="truncate">{address.geocoding.level.code}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-[#a9aea6]">r2</span>
+                  <span>1 shard read</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {address.overlays && Object.keys(address.overlays).length > 0 && (
+            <Plate title="Overlays">
+              <div className="flex flex-col gap-3 px-3.5 py-3">
+                {Object.entries(address.overlays).map(([key, overlay]) => (
+                  <div key={key}>
+                    <p className="m-0 mb-1 text-[11px] font-bold uppercase tracking-[0.06em] text-ink-mute">
+                      {overlay.label}
+                    </p>
+                    {overlay.features.map((feature, fi) => (
+                      <div key={fi} className="text-[13.5px] font-bold">
+                        {Object.values(feature).map(String).join(" · ")}
+                      </div>
                     ))}
                   </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Location</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {address.geocoding.geocodes.map((g, i) => (
-                  <div key={i} className="grid grid-cols-[80px_1fr] gap-1">
-                    <span className="text-muted-foreground">Latitude</span>
-                    <span className="font-mono">{g.latitude}</span>
-                    <span className="text-muted-foreground">Longitude</span>
-                    <span className="font-mono">{g.longitude}</span>
-                    <span className="text-muted-foreground">Type</span>
-                    <span>{g.type.name}</span>
-                  </div>
                 ))}
-                <div className="grid grid-cols-[80px_1fr] gap-1 pt-1 border-t">
-                  <span className="text-muted-foreground">Level</span>
-                  <span>{address.geocoding.level.name}</span>
-                </div>
-              </CardContent>
-            </Card>
+              </div>
+            </Plate>
+          )}
+        </div>
+      </div>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Street</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
-                  {address.structured.number && (
-                    <>
-                      <span className="text-muted-foreground">Number</span>
-                      <span>
-                        {[address.structured.number.prefix, address.structured.number.number, address.structured.number.suffix].filter(Boolean).join("")}
-                        {address.structured.number.last && (
-                          <span> - {[address.structured.number.last.prefix, address.structured.number.last.number, address.structured.number.last.suffix].filter(Boolean).join("")}</span>
-                        )}
-                      </span>
-                    </>
-                  )}
-                  <span className="text-muted-foreground">Name</span>
-                  <span>{address.structured.street.name}</span>
-                  {address.structured.street.type && (
-                    <>
-                      <span className="text-muted-foreground">Type</span>
-                      <span>{address.structured.street.type.code} ({address.structured.street.type.name})</span>
-                    </>
-                  )}
-                  {address.structured.street.suffix && (
-                    <>
-                      <span className="text-muted-foreground">Suffix</span>
-                      <span>{address.structured.street.suffix.name} ({address.structured.street.suffix.code})</span>
-                    </>
-                  )}
-                  {address.structured.street.class && (
-                    <>
-                      <span className="text-muted-foreground">Class</span>
-                      <span>{address.structured.street.class.name}</span>
-                    </>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Locality & State</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
-                  <span className="text-muted-foreground">Locality</span>
-                  <span>{address.structured.locality.name}</span>
-                  {address.structured.locality.class && (
-                    <>
-                      <span className="text-muted-foreground">Class</span>
-                      <span>{address.structured.locality.class.name}</span>
-                    </>
-                  )}
-                  <span className="text-muted-foreground">Postcode</span>
-                  <span>{address.structured.postcode ?? "\u2014"}</span>
-                  <span className="text-muted-foreground">State</span>
-                  <span>{address.structured.state.name} ({address.structured.state.abbreviation})</span>
-                  <span className="text-muted-foreground">Confidence</span>
-                  <span>{address.structured.confidence}</span>
-                </div>
-              </CardContent>
-            </Card>
-
-            {(address.structured.flat || address.structured.level || address.structured.buildingName || address.structured.lotNumber) && (
-              <Card className="sm:col-span-2">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Additional Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1 text-sm">
-                    {address.structured.buildingName && (
-                      <>
-                        <span className="text-muted-foreground">Building</span>
-                        <span>{address.structured.buildingName}</span>
-                      </>
-                    )}
-                    {address.structured.flat && (
-                      <>
-                        <span className="text-muted-foreground">Flat/Unit</span>
-                        <span>
-                          {address.structured.flat.type.name}{" "}
-                          {[address.structured.flat.prefix, address.structured.flat.number, address.structured.flat.suffix].filter(v => v != null).join("")}
-                        </span>
-                      </>
-                    )}
-                    {address.structured.level && (
-                      <>
-                        <span className="text-muted-foreground">Level</span>
-                        <span>
-                          {address.structured.level.type.name}{" "}
-                          {[address.structured.level.prefix, address.structured.level.number, address.structured.level.suffix].filter(v => v != null).join("")}
-                        </span>
-                      </>
-                    )}
-                    {address.structured.lotNumber && (
-                      <>
-                        <span className="text-muted-foreground">Lot</span>
-                        <span>
-                          {[address.structured.lotNumber.prefix, address.structured.lotNumber.number, address.structured.lotNumber.suffix].filter(Boolean).join("")}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {address.aliases && address.aliases.length > 0 && (
-              <Card className="sm:col-span-2">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Aliases ({address.aliases.length})</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <LinkedAddressList
-                    items={address.aliases.map((a) => ({ pid: a.pid, label: a.type.name }))}
-                  />
-                </CardContent>
-              </Card>
-            )}
-
-            {address.secondaries && address.secondaries.length > 0 && (
-              <Card className="sm:col-span-2">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">
-                    Secondary addresses ({address.secondaries.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <LinkedAddressList
-                    items={address.secondaries.map((sec) => ({ pid: sec.pid, label: sec.joinType.name }))}
-                  />
-                </CardContent>
-              </Card>
-            )}
-
-            {address.overlays && Object.keys(address.overlays).length > 0 && (
-              <Card className="sm:col-span-2">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Overlays</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  {Object.entries(address.overlays).map(([key, overlay]) => (
-                    <div key={key}>
-                      <p className="text-xs font-medium text-muted-foreground mb-1.5">{overlay.label}</p>
-                      {overlay.features.map((feature, fi) => (
-                        <div key={fi} className={`grid grid-cols-[1fr_2fr] gap-x-2 gap-y-1 text-sm${fi > 0 ? " mt-2 pt-2 border-t" : ""}`}>
-                          {Object.entries(feature).map(([prop, value]) => (
-                            <React.Fragment key={prop}>
-                              <span className="text-muted-foreground truncate" title={prop}>{prop}</span>
-                              <span className="font-mono text-xs break-all">{String(value)}</span>
-                            </React.Fragment>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="map" className="mt-4">
-          <Card>
-            <CardContent className="p-0 overflow-hidden rounded-lg">
-              <AddressMap
-                latitude={address.geocoding.geocodes[0]?.latitude}
-                longitude={address.geocoding.geocodes[0]?.longitude}
-                label={address.sla}
+      {address.aliases && address.aliases.length > 0 && (
+        <div className="mt-4">
+          <Plate title={`Aliases · ${address.aliases.length}`}>
+            <div className="px-3.5 py-3">
+              <LinkedAddressList
+                items={address.aliases.map((a) => ({ pid: a.pid, label: a.type.name }))}
               />
-            </CardContent>
-          </Card>
-        </TabsContent>
+            </div>
+          </Plate>
+        </div>
+      )}
 
-        <TabsContent value="json" className="mt-4">
-          <Card>
-            <CardContent className="p-4">
-              <pre className="text-xs font-mono bg-muted p-4 rounded-lg overflow-auto max-h-[600px] whitespace-pre-wrap break-all">
-                {JSON.stringify(address, null, 2)}
-              </pre>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      {address.secondaries && address.secondaries.length > 0 && (
+        <div className="mt-4">
+          <Plate
+            title={`Addresses inside this one · ${address.secondaries.length.toLocaleString()}`}
+          >
+            <div className="px-3.5 py-3">
+              <LinkedAddressList
+                items={address.secondaries.map((s) => ({ pid: s.pid, label: s.joinType.name }))}
+              />
+            </div>
+          </Plate>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={() => setJsonOpen((v) => !v)}
+          aria-expanded={jsonOpen}
+          className="plate plate-press flex w-full items-center justify-between px-3.5 py-3 font-mono text-[11.5px]"
+        >
+          <span>{"{ }"} Raw JSON</span>
+          <span className="font-bold">{jsonOpen ? "Collapse ↑" : "Expand ↓"}</span>
+        </button>
+        {jsonOpen && (
+          <pre className="mt-2 max-h-[520px] overflow-auto rounded-xl border-[2.5px] border-ink bg-ink p-4 font-mono text-[11.5px] leading-relaxed text-cream">
+            {JSON.stringify(address, null, 2)}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,9 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { Search, MapPin, Hash, ChevronDown, Loader2, Building2, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
+import { Pill, StatePanel } from "../components/blade";
 
 export const Route = createFileRoute("/")({
   component: IndexPage,
@@ -53,43 +50,66 @@ interface RequestLogEntry {
   stale: boolean;
 }
 
-/** Render text with server-provided highlight ranges */
+type Lane = "address" | "pid" | "lpid";
+
+const GNAF_PID = /^GA[A-Z]{2,3}_?\d+$/i;
+
+/**
+ * Work out which of the three identifiers was typed, so the one box can serve
+ * all of them. A PID is unmistakable; a parcel reference is a run of
+ * slash-separated parts with no spaces in it; everything else is an address.
+ */
+function detectLane(raw: string): Lane {
+  const q = raw.trim();
+  if (GNAF_PID.test(q)) return "pid";
+  if (q.length > 1 && !/\s/.test(q) && /[/\\]/.test(q)) return "lpid";
+  return "address";
+}
+
+const LANE_LABEL: Record<Lane, string> = {
+  address: "Address",
+  pid: "GNAF PID",
+  lpid: "LPID",
+};
+
+/** Render text with server-provided highlight ranges. */
 function HighlightMatch({ text, highlight }: { text: string; highlight?: [number, number][] }) {
   if (!highlight || highlight.length === 0) return <>{text}</>;
 
   const parts: React.ReactElement[] = [];
   let prev = 0;
   for (const [start, end] of highlight) {
-    if (prev < start) {
-      parts.push(<span key={prev}>{text.slice(prev, start)}</span>);
-    }
+    if (prev < start) parts.push(<span key={prev}>{text.slice(prev, start)}</span>);
     parts.push(
-      <mark key={start} className="bg-primary/15 text-foreground rounded-sm px-0.5">
+      <mark key={start} className="rounded-sm bg-signal/70 px-0.5 text-inherit">
         {text.slice(start, end)}
       </mark>
     );
     prev = end;
   }
-  if (prev < text.length) {
-    parts.push(<span key={prev}>{text.slice(prev)}</span>);
-  }
+  if (prev < text.length) parts.push(<span key={prev}>{text.slice(prev)}</span>);
 
   return <>{parts}</>;
 }
 
+/** The leading number of an address line, used to group a long street. */
+function leadingDigit(sla: string): string | null {
+  const m = /(\d)/.exec(sla);
+  return m ? m[1] : null;
+}
+
 function IndexPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"search" | "gnaf" | "lpid">("search");
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchAddresses, setSearchAddresses] = useState<SearchAddressResult[]>([]);
   const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
   const [selectedStreet, setSelectedStreet] = useState<SearchResult | null>(null);
   const [streetAddresses, setStreetAddresses] = useState<StreetAddress[]>([]);
+  const [streetDigit, setStreetDigit] = useState<string | null>(null);
   const [streetLoading, setStreetLoading] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [requestLog, setRequestLog] = useState<RequestLogEntry[]>([]);
   const [debugOpen, setDebugOpen] = useState(false);
@@ -98,27 +118,27 @@ function IndexPage() {
   const abortRef = useRef<AbortController | null>(null);
   const requestIdRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  // Build flat list of dropdown items for keyboard navigation
-  const dropdownItems: Array<
-    | { type: "address"; data: SearchAddressResult }
-    | { type: "street"; data: SearchResult }
-  > = [];
-  for (const addr of searchAddresses) {
-    dropdownItems.push({ type: "address", data: addr });
-  }
-  for (const street of searchResults) {
-    dropdownItems.push({ type: "street", data: street });
-  }
+  const lane = detectLane(query);
+  const trimmed = query.trim();
 
-  const hasDropdownContent = dropdownItems.length > 0;
-  const showDropdown =
-    mode === "search" && dropdownOpen && hasDropdownContent && !selectedStreet;
+  const dropdownItems = useMemo<
+    Array<{ type: "address"; data: SearchAddressResult } | { type: "street"; data: SearchResult }>
+  >(
+    () => [
+      ...searchAddresses.map((data) => ({ type: "address" as const, data })),
+      ...searchResults.map((data) => ({ type: "street" as const, data })),
+    ],
+    [searchAddresses, searchResults]
+  );
 
-  // Debounced search with AbortController for stale request cancellation
+  const hasResults = dropdownItems.length > 0;
+  const showResults = lane === "address" && hasResults && !selectedStreet;
+
+  // Debounced search with AbortController for stale request cancellation.
   useEffect(() => {
-    if (mode !== "search") return;
+    if (lane !== "address") return;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
@@ -143,10 +163,9 @@ function IndexPage() {
       setError(null);
       const fetchStart = performance.now();
       try {
-        const res = await fetch(
-          `/api/addresses/search?q=${encodeURIComponent(q)}&limit=10`,
-          { signal: controller.signal }
-        );
+        const res = await fetch(`/api/addresses/search?q=${encodeURIComponent(q)}&limit=10`, {
+          signal: controller.signal,
+        });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -155,23 +174,13 @@ function IndexPage() {
         const totalMs = performance.now() - fetchStart;
         const isStale = requestId !== requestIdRef.current;
 
-        const data: {
-          streets: SearchResult[];
-          addresses: SearchAddressResult[];
-        } = await res.json();
+        const data: { streets: SearchResult[]; addresses: SearchAddressResult[] } = await res.json();
 
         const meta: SearchMeta = {
-          d1RowsRead: parseInt(
-            res.headers.get("X-D1-Rows-Read") ?? "0",
-            10
-          ),
-          d1Duration: parseFloat(
-            res.headers.get("X-D1-Duration-Ms") ?? "0"
-          ),
+          d1RowsRead: parseInt(res.headers.get("X-D1-Rows-Read") ?? "0", 10),
+          d1Duration: parseFloat(res.headers.get("X-D1-Duration-Ms") ?? "0"),
           s3Fetches: parseInt(res.headers.get("X-R2-Fetches") ?? "0", 10),
-          s3Duration: parseFloat(
-            res.headers.get("X-R2-Duration-Ms") ?? "0"
-          ),
+          s3Duration: parseFloat(res.headers.get("X-R2-Duration-Ms") ?? "0"),
         };
 
         setRequestLog((prev) =>
@@ -199,7 +208,6 @@ function IndexPage() {
         setSearchAddresses(data.addresses);
         setSearchMeta(meta);
         setSelectedStreet(null);
-        setDropdownOpen(true);
         setActiveIndex(-1);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -209,78 +217,20 @@ function IndexPage() {
         setSearchAddresses([]);
         setSearchMeta(null);
       } finally {
-        if (requestId === requestIdRef.current) {
-          setSearchLoading(false);
-        }
+        if (requestId === requestIdRef.current) setSearchLoading(false);
       }
     }, 200);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [query, mode]);
+  }, [query, lane]);
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (
-        dropdownRef.current &&
-        !dropdownRef.current.contains(e.target as Node) &&
-        inputRef.current &&
-        !inputRef.current.contains(e.target as Node)
-      ) {
-        setDropdownOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  // Keyboard navigation for dropdown
-  const handleSearchKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (!showDropdown) return;
-
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setActiveIndex((prev) =>
-          Math.min(prev + 1, dropdownItems.length - 1)
-        );
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setActiveIndex((prev) => Math.max(prev - 1, -1));
-      } else if (e.key === "Enter" && activeIndex >= 0) {
-        e.preventDefault();
-        const item = dropdownItems[activeIndex];
-        if (item.type === "address") {
-          navigate({
-            to: "/address/$gnafId",
-            params: { gnafId: (item.data as SearchAddressResult).pid },
-          });
-        } else {
-          handleStreetSelect(item.data as SearchResult);
-        }
-      } else if (e.key === "Escape") {
-        setDropdownOpen(false);
-      }
-    },
-    [showDropdown, activeIndex, dropdownItems, navigate]
-  );
-
-  // Scroll active item into view
-  useEffect(() => {
-    if (activeIndex < 0 || !dropdownRef.current) return;
-    const el = dropdownRef.current.querySelector(
-      `[data-index="${activeIndex}"]`
-    );
-    el?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
-
-  // Load all addresses on a street
+  // Load every address on a street, then group by leading number client-side.
   const handleStreetSelect = useCallback(async (street: SearchResult) => {
     setSelectedStreet(street);
     setStreetAddresses([]);
-    setDropdownOpen(false);
+    setStreetDigit(null);
     setStreetLoading(true);
     setError(null);
 
@@ -290,8 +240,7 @@ function IndexPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? `HTTP ${res.status}`);
       }
-      const data: StreetAddress[] = await res.json();
-      setStreetAddresses(data);
+      setStreetAddresses((await res.json()) as StreetAddress[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -299,20 +248,70 @@ function IndexPage() {
     }
   }, []);
 
-  const handleModeChange = (newMode: "search" | "gnaf" | "lpid") => {
-    setMode(newMode);
-    setQuery("");
-    setSearchResults([]);
-    setSearchAddresses([]);
-    setSearchMeta(null);
-    setSelectedStreet(null);
-    setStreetAddresses([]);
-    setError(null);
-    setDropdownOpen(false);
-    setActiveIndex(-1);
-  };
+  const submit = useCallback(() => {
+    if (!trimmed) return;
+    if (lane === "pid") {
+      navigate({ to: "/address/$gnafId", params: { gnafId: trimmed } });
+      return;
+    }
+    if (lane === "lpid") {
+      navigate({ to: "/lotdp/$lotdpId", params: { lotdpId: trimmed } });
+      return;
+    }
+    const item = dropdownItems[activeIndex >= 0 ? activeIndex : 0];
+    if (!item) return;
+    if (item.type === "address") {
+      navigate({ to: "/address/$gnafId", params: { gnafId: item.data.pid } });
+    } else {
+      handleStreetSelect(item.data);
+    }
+  }, [trimmed, lane, navigate, dropdownItems, activeIndex, handleStreetSelect]);
 
-  const handleClear = () => {
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submit();
+        return;
+      }
+      if (!showResults) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIndex((prev) => Math.min(prev + 1, dropdownItems.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIndex((prev) => Math.max(prev - 1, -1));
+      } else if (e.key === "Escape") {
+        setActiveIndex(-1);
+        inputRef.current?.blur();
+      }
+    },
+    [showResults, dropdownItems.length, submit]
+  );
+
+  useEffect(() => {
+    if (activeIndex < 0 || !listRef.current) return;
+    listRef.current.querySelector(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
+  const digits = useMemo(() => {
+    const seen = new Set<string>();
+    for (const a of streetAddresses) {
+      const d = leadingDigit(a.s);
+      if (d) seen.add(d);
+    }
+    return [...seen].sort();
+  }, [streetAddresses]);
+
+  const shownStreetAddresses = useMemo(
+    () =>
+      streetDigit === null
+        ? streetAddresses
+        : streetAddresses.filter((a) => leadingDigit(a.s) === streetDigit),
+    [streetAddresses, streetDigit]
+  );
+
+  const clear = () => {
     setQuery("");
     setSearchResults([]);
     setSearchAddresses([]);
@@ -320,419 +319,407 @@ function IndexPage() {
     setSelectedStreet(null);
     setStreetAddresses([]);
     setError(null);
-    setDropdownOpen(false);
     setActiveIndex(-1);
     inputRef.current?.focus();
   };
 
-  // Direct lookup submissions navigate to their routes
-  const [directQuery, setDirectQuery] = useState("");
-  const handleDirectSearch = () => {
-    const q = directQuery.trim();
-    if (!q) return;
-    if (mode === "gnaf") {
-      navigate({ to: "/address/$gnafId", params: { gnafId: q } });
-    } else if (mode === "lpid") {
-      navigate({ to: "/lotdp/$lotdpId", params: { lotdpId: q } });
-    }
-  };
-
-  return (
-    <>
-      <div className="mb-6">
-        <div className="flex gap-2 mb-3">
-          <Button
-            variant={mode === "search" ? "default" : "outline"}
-            size="sm"
-            onClick={() => handleModeChange("search")}
-            className="gap-1.5"
-          >
-            <Search className="h-3.5 w-3.5" />
-            Search
-          </Button>
-          <Button
-            variant={mode === "gnaf" ? "default" : "outline"}
-            size="sm"
-            onClick={() => handleModeChange("gnaf")}
-            className="gap-1.5"
-          >
-            <Hash className="h-3.5 w-3.5" />
-            GNAF PID
-          </Button>
-          <Button
-            variant={mode === "lpid" ? "default" : "outline"}
-            size="sm"
-            onClick={() => handleModeChange("lpid")}
-            className="gap-1.5"
-          >
-            <MapPin className="h-3.5 w-3.5" />
-            LPID
-          </Button>
-        </div>
-
-        {mode === "search" ? (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder="Search for an address, e.g. 1 Macquarie St Sydney"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                if (selectedStreet) {
-                  setSelectedStreet(null);
-                  setStreetAddresses([]);
-                }
-              }}
-              onFocus={() => {
-                if (hasDropdownContent && !selectedStreet) setDropdownOpen(true);
-              }}
-              onKeyDown={handleSearchKeyDown}
-              className="h-11 w-full rounded-lg border border-input bg-background pl-10 pr-10 text-base shadow-sm transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-            />
-            {searchLoading && (
-              <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
-            )}
-            {!searchLoading && query && (
-              <button
-                type="button"
-                onClick={handleClear}
-                className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-
-            {/* Typeahead dropdown */}
-            {showDropdown && (
-              <div
-                ref={dropdownRef}
-                className="absolute z-50 left-0 right-0 top-full mt-1 max-h-[420px] overflow-auto rounded-lg border border-border bg-popover shadow-lg"
-              >
-                {searchAddresses.length > 0 && (
-                  <div className="px-3 py-2">
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                      Addresses
-                    </p>
-                  </div>
-                )}
-                {searchAddresses.map((addr, i) => {
-                  const idx = i;
-                  return (
-                    <Link
-                      key={addr.pid}
-                      to="/address/$gnafId"
-                      params={{ gnafId: addr.pid }}
-                      data-index={idx}
-                      className={`w-full text-left px-3 py-2.5 flex items-center gap-2.5 transition-colors cursor-pointer no-underline ${
-                        idx === activeIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/50"
-                      }`}
-                      onMouseEnter={() => setActiveIndex(idx)}
-                    >
-                      <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-sm truncate">
-                        <HighlightMatch text={addr.sla} highlight={addr.highlight} />
-                      </span>
-                    </Link>
-                  );
-                })}
-
-                {searchResults.length > 0 && (
-                  <div
-                    className={`px-3 py-2 ${searchAddresses.length > 0 ? "border-t border-border" : ""}`}
-                  >
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-                      Streets
-                    </p>
-                  </div>
-                )}
-                {searchResults.map((result, i) => {
-                  const idx = searchAddresses.length + i;
-                  return (
-                    <button
-                      key={result.streetId}
-                      type="button"
-                      data-index={idx}
-                      className={`w-full text-left px-3 py-2.5 flex items-center justify-between gap-2 transition-colors cursor-pointer ${
-                        idx === activeIndex
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-accent/50"
-                      }`}
-                      onMouseEnter={() => setActiveIndex(idx)}
-                      onClick={() => handleStreetSelect(result)}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-sm truncate">
-                          <HighlightMatch
-                            text={result.display}
-                            highlight={result.highlight}
-                          />
-                        </span>
-                      </div>
-                      <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-                        {result.addressCount}
-                      </span>
-                    </button>
-                  );
-                })}
-
-                {/* Performance footer */}
-                {searchMeta && (
-                  <div className="border-t border-border px-3 py-1.5 flex items-center gap-3 text-[10px] text-muted-foreground">
-                    <span>
-                      D1: {searchMeta.d1Duration.toFixed(0)}ms /{" "}
-                      {searchMeta.d1RowsRead.toLocaleString()} rows
-                    </span>
-                    <span>
-                      R2: {searchMeta.s3Duration.toFixed(0)}ms /{" "}
-                      {searchMeta.s3Fetches} fetches
-                    </span>
-                  </div>
-                )}
+  // ── Street drill-down replaces the landing content ──────────────────────
+  if (selectedStreet) {
+    return (
+      <div className="px-4 py-7 sm:px-6">
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+          <div className="blade-plate">
+            <div className="blade-face px-5 pt-2.5 pb-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-mint">
+                {selectedStreet.locality} {selectedStreet.state} {selectedStreet.postcode} · street id{" "}
+                {selectedStreet.streetId}
               </div>
-            )}
+              <div className="text-[26px] font-black uppercase leading-[1.05] tracking-[-0.015em] text-white sm:text-[34px]">
+                {selectedStreet.streetName}
+              </div>
+            </div>
           </div>
-        ) : (
-          <div>
-            <form
-              className="flex gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleDirectSearch();
-              }}
-            >
-              <Input
-                placeholder={
-                  mode === "gnaf"
-                    ? "e.g. GANSW706597865"
-                    : "e.g. 21/633510"
-                }
-                value={directQuery}
-                onChange={(e) => setDirectQuery(e.target.value)}
-                className="font-mono"
-              />
-              <Button type="submit" disabled={!directQuery.trim()}>
-                <Search className="h-4 w-4" />
-              </Button>
-            </form>
-            {(mode === "gnaf" || mode === "lpid") && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Examples:{" "}
-                {(mode === "gnaf"
-                  ? [
-                      "GANSW706597865",
-                      "GAVIC412717665",
-                      "GAQLD425588765",
-                      "GAWA_148312575",
-                      "GATAS702241259",
-                      "GAACT717940975",
-                    ]
-                  : [
-                      "21/633510",
-                      "CP/SP58841",
-                      "1\\TP800196",
-                      "D073064/50",
-                      "114588/1",
-                      "CANB/GRIF/25/14",
-                    ]
-                ).map((ex, i) => (
-                  <span key={ex}>
-                    {i > 0 && <span className="mx-1">&middot;</span>}
-                    <button
-                      type="button"
-                      className="font-mono hover:text-foreground transition-colors"
-                      onClick={() => {
-                        setDirectQuery(ex);
-                      }}
-                    >
-                      {ex}
-                    </button>
-                  </span>
-                ))}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {error && (
-        <Card className="mb-6 border-destructive/50">
-          <CardContent className="pt-6">
-            <p className="text-sm text-destructive">{error}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Street address list */}
-      {selectedStreet && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">{selectedStreet.display}</h2>
+          <div className="flex shrink-0 flex-col items-center gap-2">
+            <div className="flex h-24 w-24 flex-col items-center justify-center rounded-full border-8 border-signal bg-white shadow-[0_5px_0_#20241f]">
+              <div className="text-[20px] font-black leading-none">
+                {selectedStreet.addressCount.toLocaleString()}
+              </div>
+              <div className="text-[9.5px] font-extrabold uppercase tracking-[0.1em] text-ink-mute">
+                addresses
+              </div>
+            </div>
             <button
               type="button"
               onClick={() => {
                 setSelectedStreet(null);
                 setStreetAddresses([]);
-                setDropdownOpen(true);
                 inputRef.current?.focus();
               }}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink-mute hover:text-ink"
             >
-              Back to results
+              ← Back to results
+            </button>
+          </div>
+        </div>
+
+        {digits.length > 1 && (
+          <div className="plate mb-4 flex flex-wrap items-center gap-3 px-4 py-3.5">
+            <span className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-ink-mute">
+              Narrow by leading number
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setStreetDigit(null)}
+                aria-pressed={streetDigit === null}
+                className={`plate-press flex h-8 items-center justify-center rounded-md border-[2.5px] border-ink px-2.5 text-[12px] font-black ${
+                  streetDigit === null ? "bg-signal" : "bg-white"
+                }`}
+              >
+                All
+              </button>
+              {digits.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setStreetDigit(d)}
+                  aria-pressed={streetDigit === d}
+                  className={`plate-press flex h-8 w-8 items-center justify-center rounded-md border-[2.5px] border-ink text-[14px] font-black ${
+                    streetDigit === d ? "bg-signal" : "bg-white"
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+            <span className="ml-auto text-[12.5px] font-semibold text-ink-soft">
+              Showing <b>{shownStreetAddresses.length.toLocaleString()}</b>
+              {streetDigit && (
+                <>
+                  {" "}
+                  starting with <b>{streetDigit}</b>
+                </>
+              )}
+            </span>
+          </div>
+        )}
+
+        {streetLoading && <StatePanel kind="loading" heading="Fetching street">{selectedStreet.display}</StatePanel>}
+
+        {!streetLoading && shownStreetAddresses.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {shownStreetAddresses.map((addr) => (
+              <Link
+                key={addr.p}
+                to="/address/$gnafId"
+                params={{ gnafId: addr.p }}
+                className="plate plate-press flex items-center gap-2.5 px-3 py-2.5 text-ink no-underline"
+              >
+                <span className="text-[13.5px] font-bold uppercase leading-snug">{addr.s}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+
+        {!streetLoading && streetAddresses.length === 0 && !error && (
+          <StatePanel kind="empty" heading="Blank blade">
+            No addresses are recorded on this street.
+          </StatePanel>
+        )}
+
+        {error && (
+          <StatePanel kind="error" heading="Lookup failed" detail={selectedStreet.display}>
+            {error}
+          </StatePanel>
+        )}
+      </div>
+    );
+  }
+
+  // ── Landing ────────────────────────────────────────────────────────────
+  return (
+    <>
+      <div
+        className="relative overflow-hidden px-4 pb-10 pt-10 sm:px-6 sm:pt-12"
+        style={{
+          background: "#fbf9f4",
+          backgroundImage:
+            "repeating-linear-gradient(90deg, rgba(32,36,31,0.05) 0 1px, transparent 1px 46px)",
+        }}
+      >
+        <div className="mb-8 flex flex-wrap items-start gap-6">
+          <div className="min-w-0 flex-1">
+            <div className="blade-plate inline-block">
+              <div className="blade-face px-5 pb-3.5 pt-3 sm:px-7">
+                <div className="mb-0.5 text-[13px] font-bold uppercase tracking-[0.22em] text-mint">
+                  Australia · all states
+                </div>
+                <div className="text-[38px] font-black uppercase leading-none tracking-[-0.02em] text-white sm:text-[50px]">
+                  Address&nbsp;Lookup
+                </div>
+              </div>
+            </div>
+            <h1 className="mt-6 mb-3.5 max-w-[560px] text-[30px] font-extrabold leading-[1.02] tracking-[-0.03em] text-balance sm:text-[40px]">
+              Type an address. Get the whole country back in milliseconds.
+            </h1>
+            <p className="m-0 max-w-[500px] text-[16.5px] leading-[1.55] text-ink-soft">
+              Every G-NAF address, sharded into R2, indexed in D1, served from the edge by a single
+              Cloudflare Worker. No database to run.
+            </p>
+          </div>
+
+          <div className="hidden w-[150px] shrink-0 pt-1.5 text-center sm:block">
+            <div className="mx-auto flex h-32 w-32 rotate-45 items-center justify-center rounded-xl border-4 border-ink bg-signal">
+              <div className="-rotate-45 text-center leading-[1.05]">
+                <div className="text-[26px] font-black tracking-[-0.02em]">15.9M</div>
+                <div className="text-[10.5px] font-bold uppercase tracking-[0.12em]">addresses</div>
+              </div>
+            </div>
+            <div className="mt-11 text-[10.5px] font-bold uppercase tracking-[0.1em] text-ink-mute">
+              Updated quarterly
+            </div>
+          </div>
+        </div>
+
+        {/* One box for all three identifiers. */}
+        <div className="max-w-[620px]">
+          <div className="flex items-stretch overflow-hidden rounded-xl border-[3px] border-ink bg-white shadow-[0_6px_0_#20241f] focus-within:shadow-[0_3px_0_#20241f]">
+            <div className="flex w-14 shrink-0 items-center justify-center border-r-[3px] border-ink bg-signal">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#20241f" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m21 21-4.34-4.34" />
+                <circle cx="11" cy="11" r="8" />
+              </svg>
+            </div>
+            <input
+              ref={inputRef}
+              type="text"
+              aria-label="Search by address, GNAF PID or legal parcel ID"
+              placeholder="1 Macquarie St Sydney"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="min-w-0 flex-1 bg-transparent px-4 py-4 text-[18px] font-bold tracking-[-0.01em] outline-none placeholder:font-semibold placeholder:text-[#a8a79f] sm:text-[20px]"
+            />
+            {trimmed && (
+              <div className="hidden items-center whitespace-nowrap border-l-[3px] border-ink bg-cream px-3.5 text-[10.5px] font-extrabold uppercase tracking-[0.1em] text-blade sm:flex">
+                {LANE_LABEL[lane]} ✓
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={submit}
+              className="plate-press flex items-center bg-blade px-4 text-[12px] font-extrabold uppercase tracking-[0.12em] text-white sm:px-5"
+            >
+              Go
             </button>
           </div>
 
-          {streetLoading && (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-[10.5px] font-extrabold uppercase tracking-[0.14em] text-ink-mute">
+              Try
+            </span>
+            {(
+              [
+                ["Address", "11/1 Hay St, Perth WA"],
+                ["GNAF PID", "GAWA_148312575"],
+                ["LPID", "D073064/50"],
+              ] as const
+            ).map(([kind, example]) => (
+              <button
+                key={example}
+                type="button"
+                onClick={() => {
+                  setQuery(example);
+                  inputRef.current?.focus();
+                }}
+                className="inline-flex items-stretch overflow-hidden rounded-[7px] border-2 border-ink bg-white"
+              >
+                <span className="flex items-center bg-signal px-1.5 py-1 text-[9.5px] font-extrabold uppercase tracking-[0.08em]">
+                  {kind}
+                </span>
+                <span className="px-2 py-1 text-[12.5px] font-bold">{example}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 mb-0 text-[12.5px] font-semibold text-ink-mute">
+            One box — it works out which of the three you gave it.
+          </p>
+
+          {error && (
+            <div className="mt-4 rounded-lg border-[2.5px] border-alarm bg-white px-4 py-3 text-[13px] font-semibold text-alarm">
+              {error}
             </div>
           )}
 
-          {!streetLoading && streetAddresses.length > 0 && (
-            <div className="rounded-lg border border-border divide-y divide-border">
-              {streetAddresses.map((addr) => (
+          {showResults && (
+            <div ref={listRef} className="mt-4 flex flex-col gap-2.5">
+              {searchAddresses.map((addr, i) => (
                 <Link
-                  key={addr.p}
+                  key={addr.pid}
                   to="/address/$gnafId"
-                  params={{ gnafId: addr.p }}
-                  className="flex items-center gap-2.5 px-3 py-2.5 hover:bg-accent/50 transition-colors no-underline text-foreground"
+                  params={{ gnafId: addr.pid }}
+                  data-index={i}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  style={{ animation: "bladeDrop 0.35s ease-out both", animationDelay: `${i * 0.04}s` }}
+                  className={`blade-plate block no-underline ${i === activeIndex ? "ring-[3px] ring-signal" : ""}`}
                 >
-                  <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="text-sm">{addr.s}</span>
+                  <div className="blade-face flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3.5 py-2.5">
+                    <span className="text-[15px] font-extrabold uppercase text-white sm:text-[17px]">
+                      <HighlightMatch text={addr.sla} highlight={addr.highlight} />
+                    </span>
+                    <span className="font-mono text-[10.5px] text-mint">{addr.pid}</span>
+                  </div>
                 </Link>
               ))}
+
+              {searchResults.map((result, i) => {
+                const idx = searchAddresses.length + i;
+                return (
+                  <button
+                    key={result.streetId}
+                    type="button"
+                    data-index={idx}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onClick={() => handleStreetSelect(result)}
+                    style={{ animation: "bladeDrop 0.35s ease-out both", animationDelay: `${idx * 0.04}s` }}
+                    className={`plate plate-press flex w-full flex-wrap items-center gap-2.5 px-3.5 py-2.5 text-left ${
+                      idx === activeIndex ? "ring-[3px] ring-signal" : ""
+                    }`}
+                  >
+                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full border-2 border-ink bg-signal text-[11px] font-black">
+                      ST
+                    </span>
+                    <span className="text-[14px] font-bold uppercase sm:text-[16px]">
+                      <HighlightMatch text={result.display} highlight={result.highlight} />
+                    </span>
+                    <span className="ml-auto text-[12.5px] font-bold text-ink-mute">
+                      {result.addressCount.toLocaleString()} addresses →
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
-          {!streetLoading && streetAddresses.length === 0 && !error && (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              No addresses found
+          {searchMeta && showResults && (
+            <div className="mt-3.5 flex flex-wrap items-center gap-2">
+              <Pill tone="ink">
+                D1 {searchMeta.d1Duration.toFixed(0)}ms · {searchMeta.d1RowsRead.toLocaleString()} rows
+              </Pill>
+              <Pill>
+                R2 {searchMeta.s3Duration.toFixed(0)}ms · {searchMeta.s3Fetches} fetches
+              </Pill>
+              {query && (
+                <button type="button" onClick={clear} className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink-mute hover:text-ink">
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
+          {lane === "address" && trimmed.length > 0 && !hasResults && !searchLoading && !error && (
+            <p className="mt-4 mb-0 text-[13px] font-semibold text-ink-mute">
+              Nothing matches “{trimmed}” yet — keep typing, or try a street name and suburb.
+            </p>
+          )}
+
+          {lane !== "address" && trimmed.length > 0 && (
+            <p className="mt-4 mb-0 text-[13px] font-semibold text-ink-mute">
+              Press Go to look up this {lane === "pid" ? "GNAF PID" : "parcel reference"}.
             </p>
           )}
         </div>
-      )}
+      </div>
 
-      {/* Empty state */}
-      {!selectedStreet && !hasDropdownContent && !error && !searchLoading && (
-        <div className="text-center py-12 text-muted-foreground">
-          <MapPin className="h-10 w-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm">
-            {mode === "search"
-              ? "Start typing to search for an Australian street address"
-              : mode === "gnaf"
-                ? "Enter a GNAF PID to look up an address"
-                : "Enter a legal parcel ID (LPID) to look up addresses"}
-          </p>
+      {/* What happens between the keystroke and the answer. */}
+      <section className="bg-ink px-4 py-10 text-cream sm:px-6">
+        <h2 className="m-0 mb-6 text-[24px] font-black uppercase tracking-[-0.02em] sm:text-[30px]">
+          The route your query takes
+        </h2>
+        <ol className="m-0 grid list-none gap-4 p-0 sm:grid-cols-3">
+          {[
+            ["Keystroke", "Debounced in the browser, then one request to the Worker."],
+            ["D1 · FTS5", "The street index matches the name, expanding synonyms as it goes."],
+            ["R2 shard", "One gzip shard is fetched and scored. One read, not a table scan."],
+          ].map(([step, copy], i) => (
+            <li key={step} className="rounded-lg border-2 border-slate-line p-4">
+              <div className="mb-2 flex items-center gap-2.5">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-signal text-[12px] font-black text-ink">
+                  {i + 1}
+                </span>
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-signal">
+                  {step}
+                </span>
+              </div>
+              <p className="m-0 text-[13.5px] leading-[1.55] text-[#d9d5c8]">{copy}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="px-4 py-10 sm:px-6">
+        <h2 className="m-0 mb-2.5 text-[24px] font-black uppercase tracking-[-0.02em] sm:text-[30px]">
+          Deploy your own
+        </h2>
+        <p className="m-0 mb-5 max-w-[600px] text-[14.5px] leading-[1.55] text-ink-soft">
+          Every quarterly release ships pre-sharded, so you never have to run the pipeline. The deploy
+          workflow uploads shards to R2, creates a D1 database with read replication and updates{" "}
+          <span className="font-mono font-semibold">wrangler.json</span>.
+        </p>
+        <div className="flex flex-wrap items-center gap-4 rounded-xl bg-blade px-5 py-4 shadow-[0_6px_0_rgba(11,60,44,0.4)]">
+          <span className="text-[15.5px] font-extrabold text-white">
+            Full deploy instructions live in the README
+          </span>
+          <a
+            href="https://github.com/jxeeno/gnaf-serverless#using-pre-built-data"
+            className="plate-press ml-auto inline-flex items-center rounded-lg border-[2.5px] border-ink bg-white px-4 py-2.5 text-[13px] font-black uppercase tracking-[0.06em] text-ink no-underline shadow-[0_4px_0_#20241f]"
+          >
+            Using pre-built data ↗
+          </a>
         </div>
-      )}
+      </section>
 
-      {/* Debug panel */}
       {requestLog.length > 0 && (
-        <div className="mt-8 border-t border-border pt-4">
+        <section className="border-t border-hairline px-4 py-5 sm:px-6">
           <button
             type="button"
             onClick={() => setDebugOpen((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-ink-mute hover:text-ink"
           >
-            <ChevronDown
-              className={`h-3 w-3 transition-transform ${debugOpen ? "" : "-rotate-90"}`}
-            />
-            Debug: {requestLog.length} request
-            {requestLog.length !== 1 ? "s" : ""} logged
+            {debugOpen ? "▾" : "▸"} Request log ({requestLog.length})
           </button>
           {debugOpen && (
-            <div className="mt-3 overflow-auto rounded-lg border border-border">
-              <table className="w-full text-[11px] font-mono">
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[640px] font-mono text-[11px]">
                 <thead>
-                  <tr className="border-b border-border bg-muted/50">
-                    <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">
-                      #
-                    </th>
-                    <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">
-                      Query
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      Total
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      D1
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      D1 Rows
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      R2
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      R2 Req
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      Streets
-                    </th>
-                    <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">
-                      Addrs
-                    </th>
-                    <th className="text-center px-2 py-1.5 font-medium text-muted-foreground">
-                      Status
-                    </th>
+                  <tr className="border-b-2 border-ink text-left">
+                    {["#", "Query", "Total", "D1", "Rows", "R2", "Reqs", "St", "Ad", ""].map((h) => (
+                      <th key={h} className="px-2 py-1.5 font-semibold text-ink-mute">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {requestLog.map((entry) => (
-                    <tr
-                      key={entry.id}
-                      className={`border-b border-border last:border-0 ${entry.stale ? "opacity-40" : ""}`}
-                    >
-                      <td className="px-2 py-1 text-muted-foreground">
-                        {entry.id}
-                      </td>
-                      <td className="px-2 py-1 max-w-[140px] truncate">
-                        {entry.query}
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.totalMs.toFixed(0)}ms
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.d1Duration.toFixed(0)}ms
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.d1RowsRead.toLocaleString()}
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.s3Duration.toFixed(0)}ms
-                      </td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.s3Fetches}
-                      </td>
-                      <td className="px-2 py-1 text-right">{entry.streets}</td>
-                      <td className="px-2 py-1 text-right">
-                        {entry.addresses}
-                      </td>
-                      <td className="px-2 py-1 text-center">
-                        {entry.stale ? (
-                          <span
-                            className="text-amber-500"
-                            title="Stale — superseded by newer request"
-                          >
-                            stale
-                          </span>
-                        ) : (
-                          <span className="text-green-600" title="Rendered">
-                            ok
-                          </span>
-                        )}
-                      </td>
+                  {requestLog.map((e) => (
+                    <tr key={e.id} className={`border-b border-hairline ${e.stale ? "opacity-40" : ""}`}>
+                      <td className="px-2 py-1 text-ink-mute">{e.id}</td>
+                      <td className="max-w-[140px] truncate px-2 py-1">{e.query}</td>
+                      <td className="px-2 py-1 text-right">{e.totalMs.toFixed(0)}ms</td>
+                      <td className="px-2 py-1 text-right">{e.d1Duration.toFixed(0)}ms</td>
+                      <td className="px-2 py-1 text-right">{e.d1RowsRead.toLocaleString()}</td>
+                      <td className="px-2 py-1 text-right">{e.s3Duration.toFixed(0)}ms</td>
+                      <td className="px-2 py-1 text-right">{e.s3Fetches}</td>
+                      <td className="px-2 py-1 text-right">{e.streets}</td>
+                      <td className="px-2 py-1 text-right">{e.addresses}</td>
+                      <td className="px-2 py-1 text-center">{e.stale ? "stale" : "ok"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-        </div>
+        </section>
       )}
     </>
   );

@@ -2,16 +2,20 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * "Street Blade" — the visual language of an Australian street sign.
+ *
+ * Green enamel blades carry addresses, a yellow diamond carries the warning,
+ * everything sits on thick ink borders with a hard offset shadow so panels read
+ * as physical plates rather than floating cards. No soft grey shadows, no
+ * gradients: the only depth is the 4-6px ink drop.
+ */
 
 @theme inline {
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
     --radius-xl: calc(var(--radius) + 4px);
-    --radius-2xl: calc(var(--radius) + 8px);
-    --radius-3xl: calc(var(--radius) + 12px);
-    --radius-4xl: calc(var(--radius) + 16px);
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-card: var(--card);
@@ -30,95 +34,174 @@
     --color-border: var(--border);
     --color-input: var(--input);
     --color-ring: var(--ring);
-    --color-chart-1: var(--chart-1);
-    --color-chart-2: var(--chart-2);
-    --color-chart-3: var(--chart-3);
-    --color-chart-4: var(--chart-4);
-    --color-chart-5: var(--chart-5);
-    --color-sidebar: var(--sidebar);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-ring: var(--sidebar-ring);
 }
 
+@theme {
+  --color-cream: #fbf9f4;
+  --color-cream-deep: #e8e6e0;
+  --color-cream-panel: #f0ede2;
+  --color-ink: #20241f;
+  --color-ink-soft: #4e544c;
+  --color-ink-mute: #61675f;
+  --color-hairline: #dcd6c9;
+  --color-blade: #0b6b4f;
+  --color-blade-deep: #0b3c2c;
+  --color-mint: #a8e6cd;
+  --color-signal: #f5c400;
+  --color-alarm: #d13b2e;
+  --color-slate: #2e332d;
+  --color-slate-line: #4a5048;
+  --color-slate-text: #c6cbc3;
+
+  --font-sans: Overpass, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* shadcn primitives inherit the blade palette instead of neutral greys. */
 :root {
-    --radius: 0.625rem;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.646 0.222 41.116);
-    --chart-2: oklch(0.6 0.118 184.704);
-    --chart-3: oklch(0.398 0.07 227.392);
-    --chart-4: oklch(0.828 0.189 84.429);
-    --chart-5: oklch(0.769 0.188 70.08);
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.488 0.243 264.376);
-    --chart-2: oklch(0.696 0.17 162.48);
-    --chart-3: oklch(0.769 0.188 70.08);
-    --chart-4: oklch(0.627 0.265 303.9);
-    --chart-5: oklch(0.645 0.246 16.439);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+  --radius: 0.625rem;
+  --background: #fbf9f4;
+  --foreground: #20241f;
+  --card: #ffffff;
+  --card-foreground: #20241f;
+  --popover: #ffffff;
+  --popover-foreground: #20241f;
+  --primary: #0b6b4f;
+  --primary-foreground: #ffffff;
+  --secondary: #f0ede2;
+  --secondary-foreground: #20241f;
+  --muted: #f0ede2;
+  --muted-foreground: #61675f;
+  --accent: #f5c400;
+  --accent-foreground: #20241f;
+  --destructive: #d13b2e;
+  --border: #dcd6c9;
+  --input: #20241f;
+  --ring: #0b6b4f;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
+  }
+
   body {
-    @apply bg-background text-foreground;
-    }
+    background: var(--color-cream-deep);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Street signage sets addresses in caps; body copy stays sentence case. */
+  h1,
+  h2 {
+    letter-spacing: -0.02em;
+  }
+
+  a {
+    color: var(--color-blade);
+  }
+
+  :focus-visible {
+    outline: 3px solid var(--color-signal);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* The signature plate: thick ink edge, hard drop, no blur. */
+  .plate {
+    border: 2.5px solid var(--color-ink);
+    border-radius: 10px;
+    background: #ffffff;
+    box-shadow: 0 5px 0 var(--color-ink);
+  }
+
+  .plate-sm {
+    border: 2px solid var(--color-ink);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 3px 0 var(--color-ink);
+  }
+
+  /* A street blade: green enamel with an inset white keyline. */
+  .blade-plate {
+    background: var(--color-blade);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 6px 0 rgba(11, 60, 44, 0.35);
+  }
+
+  .blade-plate > .blade-face {
+    border: 2.5px solid #ffffff;
+    border-radius: 6px;
+  }
+
+  /* Pressable plates sink onto their shadow rather than lifting. */
+  .plate-press {
+    transition:
+      transform 90ms ease-out,
+      box-shadow 90ms ease-out;
+  }
+
+  .plate-press:active {
+    transform: translateY(4px);
+    box-shadow: 0 1px 0 var(--color-ink);
+  }
+}
+
+/* Motion is reserved for the search caret, the loading ring and the map ping. */
+@keyframes caretBlink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes ringSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ping {
+  0% {
+    transform: scale(0.4);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@keyframes bladeDrop {
+  0% {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Leaflet sits inside a plate, so it must not paint its own light chrome. */
+.leaflet-container {
+  background: #e9e6dc;
+  font-family: var(--font-sans);
 }

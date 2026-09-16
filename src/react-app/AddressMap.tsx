@@ -62,11 +62,11 @@ export function AddressMap({ latitude, longitude, label }: AddressMapProps) {
 
   if (!latitude || !longitude) {
     return (
-      <div className="flex items-center justify-center h-[400px] text-sm text-muted-foreground">
-        No geocode available
+      <div className="flex h-full min-h-[300px] items-center justify-center bg-[#e9e6dc] text-[13px] font-semibold text-ink-mute">
+        No geocode for this address
       </div>
     );
   }
 
-  return <div ref={containerRef} className="h-[400px] w-full" />;
+  return <div ref={containerRef} className="h-full min-h-[300px] w-full" />;
 }
