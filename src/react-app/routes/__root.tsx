@@ -69,7 +69,7 @@ function RootLayout() {
                 .
               </p>
               <p className="m-0">
-                Software © 2026 Kenneth Tsang, released under the MIT Licence. The MIT Licence covers
+                Software © 2026 Jxeeno Pty Ltd, released under the MIT Licence. The MIT Licence covers
                 this code only — G-NAF data remains subject to its own End User Licence Agreement.
               </p>
             </div>
