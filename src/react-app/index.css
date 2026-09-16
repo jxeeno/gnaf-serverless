@@ -200,8 +200,40 @@
   }
 }
 
-/* Leaflet sits inside a plate, so it must not paint its own light chrome. */
-.leaflet-container {
+/* MapLibre sits inside a plate, so its chrome follows the plate language. */
+.maplibregl-map {
   background: #e9e6dc;
   font-family: var(--font-sans);
+}
+
+.maplibregl-ctrl-group {
+  border: 2.5px solid var(--color-ink) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 3px 0 var(--color-ink) !important;
+  overflow: hidden;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 2px solid var(--color-ink);
+}
+
+.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-scale {
+  font-family: var(--font-sans);
+  font-size: 10px;
+}
+
+.maplibregl-ctrl-scale {
+  border: 2px solid var(--color-ink) !important;
+  border-top: none !important;
+  color: var(--color-ink);
+}
+
+.maplibregl-popup-content {
+  border: 2.5px solid var(--color-ink);
+  border-radius: 8px;
+  box-shadow: 0 3px 0 var(--color-ink);
+  font-weight: 700;
+  font-size: 12.5px;
+  text-transform: uppercase;
 }

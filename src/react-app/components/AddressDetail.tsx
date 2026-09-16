@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { AddressResponse } from "../../shared/types";
-import { AddressMap } from "../AddressMap";
 import { useResolvedSlas } from "../useResolvedSlas";
 import { Blade, FieldRow, Pill, Plate } from "./blade";
+
+// MapLibre is ~1MB of the bundle. Load it after the address itself has
+// painted, rather than making the reader wait on it for the text.
+const AddressMap = lazy(() =>
+  import("../AddressMap").then((m) => ({ default: m.AddressMap }))
+);
 
 /**
  * Resolving each linked PID costs a request, and a handful of buildings have
@@ -140,11 +145,19 @@ export function AddressDetail({
       <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
         {/* The map is the panel, not a tab behind one. */}
         <div className="relative min-h-[300px] overflow-hidden rounded-xl border-[3px] border-ink shadow-[0_6px_0_#20241f] lg:min-h-[440px]">
-          <AddressMap
-            latitude={geocode?.latitude}
-            longitude={geocode?.longitude}
-            label={address.sla}
-          />
+          <Suspense
+            fallback={
+              <div className="flex h-full min-h-[300px] items-center justify-center bg-[#e9e6dc] text-[12px] font-bold uppercase tracking-[0.1em] text-ink-mute">
+                Loading map…
+              </div>
+            }
+          >
+            <AddressMap
+              latitude={geocode?.latitude}
+              longitude={geocode?.longitude}
+              label={address.sla}
+            />
+          </Suspense>
           {geocode && (
             <div className="pointer-events-none absolute bottom-3 left-3 z-[500] rounded-md bg-ink px-2.5 py-1.5 font-mono text-[10px] tracking-[0.06em] text-cream">
               {geocode.latitude.toFixed(6)}, {geocode.longitude.toFixed(6)} · {geocode.type.name}
