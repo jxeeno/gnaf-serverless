@@ -1,16 +1,90 @@
-import React from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { MapPin, FileJson, Table } from "lucide-react";
 import type { AddressResponse } from "../../shared/types";
 import { AddressMap } from "../AddressMap";
+import { useResolvedSlas } from "../useResolvedSlas";
 
-/** A handful of buildings have thousands of units; don't render them all. */
-const SECONDARY_DISPLAY_LIMIT = 250;
+/**
+ * Resolving each linked PID costs a request, and a handful of buildings have
+ * thousands of units, so reveal them a page at a time rather than all at once.
+ */
+const PAGE_SIZE = 50;
+
+/**
+ * A list of linked addresses (aliases, or the secondaries of a building). Shows
+ * the PID immediately and fills in the address as each one resolves.
+ */
+function LinkedAddressList({
+  items,
+}: {
+  items: { pid: string; label: string }[];
+}) {
+  const [shown, setShown] = useState(PAGE_SIZE);
+  const visible = useMemo(() => items.slice(0, shown), [items, shown]);
+  const pids = useMemo(() => visible.map((i) => i.pid), [visible]);
+  const slas = useResolvedSlas(pids);
+  const remaining = items.length - visible.length;
+
+  return (
+    <>
+      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        {visible.map((item) => (
+          <React.Fragment key={item.pid}>
+            <Link
+              to="/address/$gnafId"
+              params={{ gnafId: item.pid }}
+              className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground"
+            >
+              {item.pid}
+            </Link>
+            <span className="flex items-baseline gap-2 min-w-0">
+              <span className="truncate">
+                {slas[item.pid] === undefined ? (
+                  <span className="text-muted-foreground">Resolving…</span>
+                ) : slas[item.pid] === "" ? (
+                  <span className="text-muted-foreground">Unavailable</span>
+                ) : (
+                  slas[item.pid]
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground shrink-0">
+                {item.label}
+              </span>
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
+      {remaining > 0 && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() => setShown((n) => n + PAGE_SIZE)}
+        >
+          Show {Math.min(PAGE_SIZE, remaining)} more ({remaining} remaining)
+        </Button>
+      )}
+    </>
+  );
+}
 
 export function AddressDetail({ address }: { address: AddressResponse }) {
+  // The two single links in the header, resolved so the badges name an address
+  // rather than just a PID.
+  const headerPids = useMemo(
+    () =>
+      [address.alias?.principalPid, address.primary?.pid].filter(
+        (pid): pid is string => pid != null
+      ),
+    [address.alias?.principalPid, address.primary?.pid]
+  );
+  const headerSlas = useResolvedSlas(headerPids);
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -26,15 +100,22 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
           )}
           {address.alias && (
             <Link to="/address/$gnafId" params={{ gnafId: address.alias.principalPid }}>
-              <Badge variant="outline" className="text-xs hover:bg-muted">
-                Alias ({address.alias.type.name}) of <span className="font-mono ml-1">{address.alias.principalPid}</span>
+              <Badge variant="outline" className="text-xs hover:bg-muted" title={address.alias.principalPid}>
+                Alias ({address.alias.type.name}) of{" "}
+                <span className="ml-1">
+                  {headerSlas[address.alias.principalPid] ||
+                    address.alias.principalPid}
+                </span>
               </Badge>
             </Link>
           )}
           {address.primary && (
             <Link to="/address/$gnafId" params={{ gnafId: address.primary.pid }}>
-              <Badge variant="outline" className="text-xs hover:bg-muted">
-                Primary: <span className="font-mono ml-1">{address.primary.pid}</span>
+              <Badge variant="outline" className="text-xs hover:bg-muted" title={address.primary.pid}>
+                Primary:{" "}
+                <span className="ml-1">
+                  {headerSlas[address.primary.pid] || address.primary.pid}
+                </span>
               </Badge>
             </Link>
           )}
@@ -210,16 +291,9 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
                   <CardTitle className="text-sm font-medium text-muted-foreground">Aliases ({address.aliases.length})</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                    {address.aliases.map((a) => (
-                      <React.Fragment key={a.pid}>
-                        <Link to="/address/$gnafId" params={{ gnafId: a.pid }} className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground">
-                          {a.pid}
-                        </Link>
-                        <span>{a.type.name}</span>
-                      </React.Fragment>
-                    ))}
-                  </div>
+                  <LinkedAddressList
+                    items={address.aliases.map((a) => ({ pid: a.pid, label: a.type.name }))}
+                  />
                 </CardContent>
               </Card>
             )}
@@ -232,21 +306,9 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-                    {address.secondaries.slice(0, SECONDARY_DISPLAY_LIMIT).map((sec) => (
-                      <React.Fragment key={sec.pid}>
-                        <Link to="/address/$gnafId" params={{ gnafId: sec.pid }} className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground">
-                          {sec.pid}
-                        </Link>
-                        <span>{sec.joinType.name}</span>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                  {address.secondaries.length > SECONDARY_DISPLAY_LIMIT && (
-                    <p className="text-xs text-muted-foreground mt-3">
-                      Showing the first {SECONDARY_DISPLAY_LIMIT} of {address.secondaries.length} — the full list is in the JSON tab.
-                    </p>
-                  )}
+                  <LinkedAddressList
+                    items={address.secondaries.map((sec) => ({ pid: sec.pid, label: sec.joinType.name }))}
+                  />
                 </CardContent>
               </Card>
             )}
