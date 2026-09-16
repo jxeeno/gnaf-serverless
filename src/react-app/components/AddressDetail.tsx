@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import type { AddressResponse } from "../../shared/types";
 import { useResolvedSlas } from "../useResolvedSlas";
 import { Blade, FieldRow, Pill, Plate } from "./blade";
+import { RelationshipView } from "./RelationshipView";
 
 // MapLibre is ~1MB of the bundle. Load it after the address itself has
 // painted, rather than making the reader wait on it for the text.
@@ -10,68 +11,8 @@ const AddressMap = lazy(() =>
   import("../AddressMap").then((m) => ({ default: m.AddressMap }))
 );
 
-/**
- * Resolving each linked PID costs a request, and a handful of buildings have
- * thousands of units, so reveal them a page at a time rather than all at once.
- */
-const PAGE_SIZE = 50;
-
 export interface DetailTiming {
   totalMs: number;
-}
-
-/**
- * A list of linked addresses (aliases, or the secondaries of a building). Shows
- * the PID immediately and fills in the address as each one resolves.
- */
-function LinkedAddressList({ items }: { items: { pid: string; label: string }[] }) {
-  const [shown, setShown] = useState(PAGE_SIZE);
-  const visible = useMemo(() => items.slice(0, shown), [items, shown]);
-  const pids = useMemo(() => visible.map((i) => i.pid), [visible]);
-  const slas = useResolvedSlas(pids);
-  const remaining = items.length - visible.length;
-
-  return (
-    <>
-      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-        {visible.map((item) => {
-          const sla = slas[item.pid];
-          return (
-            <li key={item.pid}>
-              <Link
-                to="/address/$gnafId"
-                params={{ gnafId: item.pid }}
-                className="plate-sm plate-press flex flex-wrap items-center gap-x-2.5 gap-y-1 px-2.5 py-1.5 text-ink no-underline"
-              >
-                <span className="min-w-0 flex-1 truncate text-[13px] font-bold uppercase">
-                  {sla === undefined ? (
-                    <span className="font-semibold normal-case text-ink-mute">Resolving…</span>
-                  ) : sla === "" ? (
-                    <span className="font-semibold normal-case text-ink-mute">Address unavailable</span>
-                  ) : (
-                    sla
-                  )}
-                </span>
-                <span className="font-mono text-[10px] text-ink-mute">{item.pid}</span>
-                <span className="text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-ink-mute">
-                  {item.label}
-                </span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-      {remaining > 0 && (
-        <button
-          type="button"
-          onClick={() => setShown((n) => n + PAGE_SIZE)}
-          className="plate-press mt-2.5 inline-flex items-center rounded-lg border-[2.5px] border-ink bg-white px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em] shadow-[0_3px_0_#20241f]"
-        >
-          Show {Math.min(PAGE_SIZE, remaining)} more · {remaining.toLocaleString()} left
-        </button>
-      )}
-    </>
-  );
 }
 
 export function AddressDetail({
@@ -280,31 +221,9 @@ export function AddressDetail({
         </div>
       </div>
 
-      {address.aliases && address.aliases.length > 0 && (
-        <div className="mt-4">
-          <Plate title={`Aliases · ${address.aliases.length}`}>
-            <div className="px-3.5 py-3">
-              <LinkedAddressList
-                items={address.aliases.map((a) => ({ pid: a.pid, label: a.type.name }))}
-              />
-            </div>
-          </Plate>
-        </div>
-      )}
-
-      {address.secondaries && address.secondaries.length > 0 && (
-        <div className="mt-4">
-          <Plate
-            title={`Addresses inside this one · ${address.secondaries.length.toLocaleString()}`}
-          >
-            <div className="px-3.5 py-3">
-              <LinkedAddressList
-                items={address.secondaries.map((s) => ({ pid: s.pid, label: s.joinType.name }))}
-              />
-            </div>
-          </Plate>
-        </div>
-      )}
+      <div className="mt-4">
+        <RelationshipView address={address} />
+      </div>
 
       <div className="mt-4">
         <button
