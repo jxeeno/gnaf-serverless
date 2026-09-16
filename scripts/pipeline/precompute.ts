@@ -85,6 +85,13 @@ interface AddressResult {
   sla: string;
   highlight: [number, number][];
   streetId: number;
+  /** Principal address PID, when this address is a synonym alias */
+  aliasOf?: string;
+}
+
+/** When scores tie, list principal addresses before aliases */
+function byScoreThenPrincipal(a: { score: number; aliasOf?: string }, b: { score: number; aliasOf?: string }): number {
+  return b.score - a.score || (a.aliasOf ? 1 : 0) - (b.aliasOf ? 1 : 0);
 }
 
 // ── Street matching ─────────────────────────────────────────────────────
@@ -215,6 +222,7 @@ function executeSearch(
     displayPrefix: string;
     streetId: number;
     street: StreetEntry;
+    aliasOf?: string;
     score: number;
   }[] = [];
 
@@ -279,13 +287,14 @@ function executeSearch(
           displayPrefix: entry.d,
           streetId: street.id,
           street,
+          aliasOf: entry.pp,
           score,
         });
       }
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort(byScoreThenPrincipal);
 
   // Diversify when no numbers: 1 per street first, then backfill
   let addressSlice: typeof scored;
@@ -312,6 +321,7 @@ function executeSearch(
   const addressResults: AddressResult[] = addressSlice.map((a) => ({
     pid: a.pid,
     sla: a.sla,
+    ...(a.aliasOf ? { aliasOf: a.aliasOf } : {}),
     highlight: computeHighlightRanges(
       a.sla,
       {
@@ -356,6 +366,7 @@ function searchByNumber(
     pid: string;
     sla: string;
     streetId: number;
+    aliasOf?: string;
     score: number;
   }[] = [];
 
@@ -396,12 +407,13 @@ function searchByNumber(
         pid: entry.p,
         sla: entryToSla(entry, street),
         streetId: street.id,
+        aliasOf: entry.pp,
         score,
       });
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort(byScoreThenPrincipal);
 
   // Diversify: 1 per street first
   const seen = new Set<number>();
@@ -424,6 +436,7 @@ function searchByNumber(
   const addressResults: AddressResult[] = results.map((a) => ({
     pid: a.pid,
     sla: a.sla,
+    ...(a.aliasOf ? { aliasOf: a.aliasOf } : {}),
     highlight: computeHighlightRanges(
       a.sla,
       {

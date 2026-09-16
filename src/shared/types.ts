@@ -131,6 +131,8 @@ export interface StreetAddressEntry {
   f?: number;
   /** level_number (for numeric matching) */
   l?: number;
+  /** Principal address PID, when this address is a synonym (SYN) alias */
+  pp?: string;
 }
 
 /** A street shard file: map of street key → array of address entries */

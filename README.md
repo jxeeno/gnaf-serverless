@@ -112,7 +112,7 @@ GET /api/addresses?lpid=CANB/GRIF/25/14     # ACT block/section
 
 #### Address aliases
 
-GNAF links alternate forms of an address (alias) to a canonical one (principal) via `ADDRESS_ALIAS`. Alias addresses can be fetched by PID but are not included in search results.
+GNAF links alternate forms of an address (alias) to a canonical one (principal) via `ADDRESS_ALIAS`. Synonym (`SYN`) aliases are included in search, and address results for them include `aliasOf` with the principal PID (when scores tie, the principal is listed first). Other alias types can be fetched by PID but aren't searched.
 
 An alias address includes the principal it belongs to:
 
@@ -190,66 +190,115 @@ The pipeline downloads, processes, and uploads GNAF data. It runs via GitHub Act
 | `S3_BUCKET` | R2 bucket name |
 | `S3_ACCESS_KEY_ID` | R2 API token access key ID |
 | `S3_SECRET_ACCESS_KEY` | R2 API token secret access key |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token (for D1 remote access) |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token. Only needed for the `wrangler d1` commands, not the pipeline scripts. |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID. Only needed for the `wrangler d1` commands. |
 | `SHARD_PREFIX_LENGTH` | Hex chars for shard key (default: `3`, giving 4096 shards) |
 | `GNAF_STATES` | Comma-separated state filter (e.g. `OT,NSW`). Omit for all states. |
+| `GNAF_DATUM` | Coordinate datum to download: `GDA2020` (default) or `GDA94` |
+| `GNAF_SKIP_LATEST` | Set to `1` to upload without updating the `gnaf/latest.json` pointer |
+| `SHARD_PARTITION` | Only shard prefixes starting with this hex digit (`0`–`f`). Used by CI to shard in parallel. |
 
 ### Pipeline Steps
 
-```bash
-# Run the full pipeline
-npm run pipeline:run
+Run the full pipeline:
 
-# Or run individual steps
+```bash
+npm run pipeline:run
+```
+
+Or run the steps individually, in this order:
+
+```bash
 npm run pipeline:download      # Download GNAF ZIP from data.gov.au
-npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includes alias and primary/secondary links)
+npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includes address aliases and primary/secondary links)
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
 npm run pipeline:precompute    # Pre-compute short query results (requires search-index)
-npm run pipeline:upload        # Upload shards to R2
+npm run pipeline:upload        # Upload shards to R2 and update gnaf/latest.json
 ```
+
+Notes:
+
+- `npm run pipeline:run` runs all six steps. It doesn't load the search index into D1; see [Loading the Search Index](#loading-the-search-index).
+- `pipeline:download` is skipped if `data/gnaf/` already exists. Delete `data/gnaf/` and `data/gnaf.zip` to pick up a newer GNAF release.
+- Local builds are versioned `v<YYYYMMDD>-<datum>` (e.g. `v20260913-gda2020`). CI builds include the GNAF release, e.g. `v20260815-may2026-gda2020`.
+- Upload writes to `gnaf/<version>/` and updates `gnaf/latest.json`. Set `GNAF_SKIP_LATEST=1` to leave the pointer alone.
 
 ### Loading the Search Index
 
-The search index is loaded into D1 automatically by the [Deploy workflow](.github/workflows/deploy-gnaf.yml), which creates a fresh D1 database per release and updates `wrangler.json` with the new database ID.
+The search index is loaded into D1 automatically by the [Deploy workflow](.github/workflows/deploy-gnaf.yml), which creates a fresh D1 database per release, enables read replication, and updates `wrangler.json` with the new database ID.
 
-For local development:
+`npm run dev` uses the remote D1 database, because the `SEARCH_DB` binding is marked `"remote": true` in `wrangler.json`. To develop against a local copy instead, set `"remote": false` on that binding and load the SQL locally:
 
 ```bash
 for f in data/shards/search-index/*.sql; do
-  npx wrangler d1 execute gnaf-search --local --file="$f"
+  npx wrangler d1 execute SEARCH_DB --local --file="$f"
 done
 ```
+
+### GitHub Actions
+
+The [Update GNAF Data workflow](.github/workflows/update-gnaf.yml) runs on the 15th of Feb, May, Aug and Nov, and can be run manually from the Actions tab. It builds the data, publishes a GitHub release, and then starts the [Deploy workflow](.github/workflows/deploy-gnaf.yml).
+
+#### Test builds
+
+To try pipeline changes on a branch without touching production, run the Update GNAF Data workflow on that branch with a `test_suffix` (e.g. `aliases`):
+
+```bash
+gh workflow run update-gnaf.yml --ref my-branch -f test_suffix=aliases
+```
+
+A test build:
+
+- appends the suffix to the version (e.g. `v20260913-aug2026-gda2020-aliases`)
+- uploads to R2 without updating `gnaf/latest.json`
+- creates its own D1 database (without read replication) and loads the search index
+- commits `wrangler.json` on the branch to point at the test data, which triggers a branch preview build (never on `main`)
+- skips the GitHub release and the production deploy
+
+Before merging the branch, revert the `wrangler.json` commit. Clean up the test D1 database and R2 prefix when you're done.
 
 ## Using Pre-built Data
 
 Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index.
 
-The [Deploy workflow](.github/workflows/deploy-gnaf.yml) runs automatically on each release — it uploads shards to R2, creates a new D1 database, and updates `wrangler.json`. You can also re-trigger it manually from the Actions tab.
+The [Deploy workflow](.github/workflows/deploy-gnaf.yml) uploads shards to R2, creates a new D1 database with read replication, and updates `wrangler.json`. It runs when:
+
+- the Update GNAF Data workflow finishes (it starts the deploy itself, because releases created by GitHub Actions don't trigger other workflows)
+- a release is published manually
+- you run it from the Actions tab, optionally with a release tag
 
 To deploy manually instead:
 
-1. Download the latest `gnaf-shards-*.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases)
+1. Download a `gnaf-shards-<version>.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases) (about 1.5 GB). The examples below use `v20260815-may2026-gda2020`.
 2. Create the R2 bucket and extract/upload:
    ```bash
    npx wrangler r2 bucket create gnaf-data --location oc
-   tar -xf gnaf-shards-v20260301-gda2020.tar
+   mkdir shards && tar -xf gnaf-shards-v20260815-may2026-gda2020.tar -C shards && cd shards
    # Upload via R2's S3-compatible API
-   aws s3 sync . s3://gnaf-data/gnaf/v20260301-gda2020/ \
+   aws s3 sync . s3://gnaf-data/gnaf/v20260815-may2026-gda2020/ \
      --endpoint-url https://<account_id>.r2.cloudflarestorage.com \
-     --exclude metadata.json --exclude 'search-index/*'
-   aws s3 cp metadata.json s3://gnaf-data/gnaf/v20260301-gda2020/metadata.json \
-     --endpoint-url https://<account_id>.r2.cloudflarestorage.com
+     --exclude 'search-index/*'
    ```
 3. Create a D1 database and load the search index:
    ```bash
-   npx wrangler d1 create gnaf-search-v20260301-gda2020 --location=OC
+   npx wrangler d1 create gnaf-search-v20260815-may2026-gda2020 --location=oc
    for f in search-index/*.sql; do
-     npx wrangler d1 execute gnaf-search-v20260301-gda2020 --remote --file="$f"
+     npx wrangler d1 execute gnaf-search-v20260815-may2026-gda2020 --remote --file="$f"
    done
    ```
-4. Update `wrangler.json` with the new D1 `database_id`, `database_name`, and set `vars.GNAF_VERSION` to the version string (e.g. `v20260301-gda2020`)
+4. Optionally enable D1 read replication (the Deploy workflow does this):
+   ```bash
+   curl -X PATCH \
+     "https://api.cloudflare.com/client/v4/accounts/<account_id>/d1/database/<database_id>" \
+     -H "Authorization: Bearer <api_token>" \
+     -H "Content-Type: application/json" \
+     -d '{"read_replication":{"mode":"auto"}}'
+   ```
+5. Update `wrangler.json`:
+   - set the D1 `database_id` and `database_name`
+   - set `vars.GNAF_VERSION` to the version (e.g. `v20260815-may2026-gda2020`)
+   - if you're deploying to your own account, change `routes` (custom domain `gnaf.k3n.au`) and the R2 `bucket_name`s to your own
 
 ## PMTiles Overlays
 
@@ -311,7 +360,9 @@ When overlays are configured and a match is found, the address response includes
 
 ## Deployment
 
-Build and deploy the worker:
+The worker is deployed by Cloudflare Workers Builds when commits are pushed to `main`. Pushes to other branches upload a preview version with a preview URL (`<branch>-gnaf-s3-query.<subdomain>.workers.dev`). `wrangler.json` sets `"preview_urls": true` so production deploys don't turn preview URLs off.
+
+To build and deploy manually:
 
 ```bash
 npm run build
@@ -319,6 +370,8 @@ npm run deploy
 ```
 
 The worker uses a native R2 binding (`GNAF_BUCKET`) configured in `wrangler.json` — no secrets are needed for data access.
+
+API responses are cached with the Cache API for a week, keyed by URL and GNAF version, so deploying a new data version doesn't serve stale responses.
 
 ## Pre-computed Short Queries
 

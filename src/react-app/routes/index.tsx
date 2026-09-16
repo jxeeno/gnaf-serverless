@@ -22,6 +22,7 @@ interface SearchAddressResult {
   sla: string;
   highlight?: [number, number][];
   streetId: number;
+  aliasOf?: string;
 }
 
 interface StreetAddress {
@@ -568,7 +569,14 @@ function IndexPage() {
                     <span className="text-[15px] font-extrabold uppercase text-white sm:text-[17px]">
                       <HighlightMatch text={addr.sla} highlight={addr.highlight} />
                     </span>
-                    <span className="font-mono text-[10.5px] text-mint">{addr.pid}</span>
+                    <span className="flex items-center gap-2">
+                      {addr.aliasOf && (
+                        <span className="rounded-full bg-signal px-2 py-[3px] text-[9.5px] font-extrabold uppercase tracking-[0.08em] text-ink">
+                          alias
+                        </span>
+                      )}
+                      <span className="font-mono text-[10.5px] text-mint">{addr.pid}</span>
+                    </span>
                   </div>
                 </Link>
               ))}

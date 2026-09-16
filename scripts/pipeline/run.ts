@@ -23,13 +23,10 @@ async function main(): Promise<void> {
   await shard();
   console.log();
 
-  // Writes shards/streets/ and the D1 search index SQL. Without it, upload has
-  // no street shards to send and search/autocomplete has nothing to read.
   console.log("Step 4/6: Generate search index");
   await generateSearchIndex();
   console.log();
 
-  // Reads shards/streets/, so it has to follow the search index.
   console.log("Step 5/6: Pre-compute short queries");
   await precompute();
   console.log();

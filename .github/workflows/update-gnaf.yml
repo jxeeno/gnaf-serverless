@@ -7,21 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       shard_prefix_length:
-        description: 'Shard prefix length (hex chars)'
+        description: 'Shard prefix length (hex chars, 1-4)'
         required: false
         default: '3'
       datum:
-        description: 'Coordinate datum (GDA94 or GDA2020)'
-        required: false
-        default: 'GDA2020'
+        description: 'Coordinate datum'
+        type: choice
+        options:
+          - GDA2020
+          - GDA94
+        default: GDA2020
       test_suffix:
         description: 'Test build suffix (e.g. "aliases"). When set: version gets this suffix, uploads straight to R2 without updating latest.json, and skips the GitHub release + deploy.'
         required: false
         default: ''
 
+# Jobs get read-only access by default; only the release job can write
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   NODE_OPTIONS: '--max-old-space-size=4096'
@@ -37,9 +40,26 @@ jobs:
     outputs:
       gnaf_release_name: ${{ steps.gnaf-version.outputs.gnaf_release_name }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Validate inputs
+        run: |
+          if ! [[ "$SHARD_PREFIX_LENGTH" =~ ^[1-4]$ ]]; then
+            echo "::error::shard_prefix_length must be a number from 1 to 4"
+            exit 1
+          fi
+          if ! [[ "$GNAF_DATUM" =~ ^(GDA2020|GDA94)$ ]]; then
+            echo "::error::datum must be GDA2020 or GDA94"
+            exit 1
+          fi
+          if [ -n "$TEST_SUFFIX" ] && ! [[ "$TEST_SUFFIX" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::test_suffix must match [a-z0-9-]+"
+            exit 1
+          fi
 
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -54,17 +74,22 @@ jobs:
             | jq -r --arg DATUM "$GNAF_DATUM" \
               '.result.resources | map(select(.format == "ZIP" and .state == "active")) | sort_by(.last_modified // .created) | reverse | map(select(.name | ascii_upcase | contains($DATUM))) | first | .name')
           echo "resource_name=$RESOURCE_NAME"
-          CACHE_KEY=$(echo "$RESOURCE_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+          CACHE_KEY=$(echo "$RESOURCE_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.-')
           echo "cache_key=gnaf-zip-${CACHE_KEY}" >> "$GITHUB_OUTPUT"
 
           # Extract GNAF release name (e.g. "FEB 2026" → "February 2026")
           RELEASE_SHORT=$(echo "$RESOURCE_NAME" | grep -oP '^\w+ \d{4}')
           GNAF_RELEASE_NAME=$(date -d "1 ${RELEASE_SHORT}" +"%B %Y" 2>/dev/null || echo "$RELEASE_SHORT")
+          # The release name comes from external data: only allow letters, digits and spaces
+          if ! [[ "$GNAF_RELEASE_NAME" =~ ^[A-Za-z]+\ [0-9]{4}$ ]]; then
+            echo "::error::Unexpected GNAF release name: $GNAF_RELEASE_NAME"
+            exit 1
+          fi
           echo "gnaf_release_name=$GNAF_RELEASE_NAME" >> "$GITHUB_OUTPUT"
           echo "GNAF release: $GNAF_RELEASE_NAME"
 
       - name: Restore GNAF ZIP cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: data/gnaf.zip
           key: ${{ steps.gnaf-version.outputs.cache_key }}
@@ -74,7 +99,7 @@ jobs:
 
       - name: Save GNAF ZIP cache
         if: always()
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: data/gnaf.zip
           key: ${{ steps.gnaf-version.outputs.cache_key }}
@@ -83,7 +108,7 @@ jobs:
         run: npm run pipeline:import
 
       - name: Upload DuckDB artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gnaf-duckdb
           path: data/gnaf.duckdb
@@ -100,9 +125,11 @@ jobs:
       matrix:
         partition: ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f']
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -111,7 +138,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gnaf-duckdb
           path: data
@@ -122,7 +149,7 @@ jobs:
           SHARD_PARTITION: ${{ matrix.partition }}
 
       - name: Upload shard artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gnaf-shards-${{ matrix.partition }}
           path: |
@@ -139,26 +166,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all shard partitions
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: gnaf-shards-*
           merge-multiple: true
           path: data/shards
 
       - name: Generate metadata
+        env:
+          GNAF_RELEASE_NAME: ${{ needs.build-db.outputs.gnaf_release_name }}
         run: |
           TOTAL_ADDRESSES=$(jq -r '.totalAddresses' data/shards/_partial_meta_0.json)
-          TOTAL_SHARDS=$(ls data/shards/addresses/ | wc -l | tr -d ' ')
-          TOTAL_LOTDP=$(ls data/shards/lotdp/ | wc -l | tr -d ' ')
+          TOTAL_SHARDS=$(find data/shards/addresses -type f | wc -l | tr -d ' ')
+          TOTAL_LOTDP=$(find data/shards/lotdp -type f | wc -l | tr -d ' ')
           DATE=$(date -u -Iseconds)
-          GNAF_RELEASE_NAME="${{ needs.build-db.outputs.gnaf_release_name }}"
           GNAF_RELEASE_SHORT=$(echo "$GNAF_RELEASE_NAME" | awk '{print tolower(substr($1,1,3)) $2}')
           VERSION="v$(date -u +%Y%m%d)-${GNAF_RELEASE_SHORT}-${GNAF_DATUM,,}"
           if [ -n "$TEST_SUFFIX" ]; then
-            if ! [[ "$TEST_SUFFIX" =~ ^[a-z0-9-]+$ ]]; then
-              echo "::error::test_suffix must match [a-z0-9-]+"
-              exit 1
-            fi
             VERSION="${VERSION}-${TEST_SUFFIX}"
           fi
 
@@ -178,7 +202,7 @@ jobs:
           echo "Metadata: $(cat data/shards/metadata.json)"
 
       - name: Upload merged shard artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gnaf-shards
           path: |
@@ -194,9 +218,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -205,7 +231,7 @@ jobs:
         run: npm ci
 
       - name: Download DuckDB artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gnaf-duckdb
           path: data
@@ -217,7 +243,7 @@ jobs:
         run: npm run pipeline:precompute
 
       - name: Upload search index artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: gnaf-search-index
           path: |
@@ -232,10 +258,15 @@ jobs:
     needs: [merge-shards, search-index]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write # create the release, push test build config
+      actions: write # trigger the deploy workflow, delete artifacts
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -244,13 +275,13 @@ jobs:
         run: npm ci
 
       - name: Download shard artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gnaf-shards
           path: data/shards
 
       - name: Download search index artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: gnaf-search-index
           path: data/shards
@@ -263,11 +294,17 @@ jobs:
           TOTAL=$(jq -r .totalAddresses data/shards/metadata.json)
           DATUM=$(jq -r .datum data/shards/metadata.json)
           GNAF_RELEASE=$(jq -r .gnafReleaseName data/shards/metadata.json)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
-          echo "datum=$DATUM" >> "$GITHUB_OUTPUT"
-          echo "gnaf_release=$GNAF_RELEASE" >> "$GITHUB_OUTPUT"
+          if ! [[ "$VERSION" =~ ^v[0-9]{8}(-[a-z0-9]+)+$ ]]; then
+            echo "::error::Unexpected version: $VERSION"
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "date=$DATE"
+            echo "total=$TOTAL"
+            echo "datum=$DATUM"
+            echo "gnaf_release=$GNAF_RELEASE"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload to R2 (test build)
         if: env.TEST_SUFFIX != ''
@@ -283,8 +320,12 @@ jobs:
       - name: Create D1 database (test build)
         id: d1
         if: env.TEST_SUFFIX != ''
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          DB_NAME="gnaf-search-${{ steps.meta.outputs.version }}"
+          DB_NAME="gnaf-search-${VERSION}"
           OUTPUT=$(npx wrangler d1 create "$DB_NAME" --location=oc 2>&1)
           echo "$OUTPUT"
           DB_ID=$(echo "$OUTPUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
@@ -294,64 +335,88 @@ jobs:
           fi
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
           echo "db_name=$DB_NAME" >> "$GITHUB_OUTPUT"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Import search index to D1 (test build)
         if: env.TEST_SUFFIX != ''
+        env:
+          DB_NAME: ${{ steps.d1.outputs.db_name }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           for f in data/shards/search-index/*.sql; do
             echo "Executing $f..."
-            npx wrangler d1 execute "${{ steps.d1.outputs.db_name }}" --remote --file="$f"
+            npx wrangler d1 execute "$DB_NAME" --remote --file="$f"
           done
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Point branch wrangler.json at test build
         # Never rewrite main's config from a test build
         if: env.TEST_SUFFIX != '' && github.ref != 'refs/heads/main'
+        env:
+          DB_ID: ${{ steps.d1.outputs.db_id }}
+          DB_NAME: ${{ steps.d1.outputs.db_name }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          jq --arg id "${{ steps.d1.outputs.db_id }}" \
-             --arg name "${{ steps.d1.outputs.db_name }}" \
-             --arg version "${{ steps.meta.outputs.version }}" \
+          if [ "$GITHUB_REF_TYPE" != "branch" ]; then
+            echo "::error::Test builds must run on a branch"
+            exit 1
+          fi
+          jq --arg id "$DB_ID" \
+             --arg name "$DB_NAME" \
+             --arg version "$VERSION" \
              '.d1_databases[0].database_id = $id | .d1_databases[0].database_name = $name | .vars.GNAF_VERSION = $version' \
              wrangler.json > wrangler.json.tmp && mv wrangler.json.tmp wrangler.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add wrangler.json
-          git commit -m "chore: deploy GNAF test build ${{ steps.meta.outputs.version }}"
-          git pull --rebase
-          git push
+          git commit -m "chore: deploy GNAF test build ${VERSION}"
+          # Credentials are only used for these two commands (checkout doesn't persist them)
+          REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git pull --rebase "$REMOTE" "$GITHUB_REF_NAME"
+          git push "$REMOTE" "HEAD:${GITHUB_REF_NAME}"
 
       - name: Test build summary
         if: env.TEST_SUFFIX != ''
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GNAF_RELEASE: ${{ steps.meta.outputs.gnaf_release }}
+          DB_ID: ${{ steps.d1.outputs.db_id }}
+          DB_NAME: ${{ steps.d1.outputs.db_name }}
         run: |
-          echo "### GNAF test build uploaded" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: \`${{ steps.meta.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **GNAF release**: ${{ steps.meta.outputs.gnaf_release }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **D1**: \`${{ steps.d1.outputs.db_name }}\` (\`${{ steps.d1.outputs.db_id }}\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- gnaf/latest.json was not updated; no release or production deploy was created" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### GNAF test build uploaded"
+            echo ""
+            echo "- **Version**: \`${VERSION}\`"
+            echo "- **GNAF release**: ${GNAF_RELEASE}"
+            echo "- **D1**: \`${DB_NAME}\` (\`${DB_ID}\`)"
+            echo "- **Branch**: \`${GITHUB_REF_NAME}\`"
+            echo "- gnaf/latest.json was not updated; no release or production deploy was created"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create release archive
         if: env.TEST_SUFFIX == ''
-        run: tar -cf gnaf-shards-${{ steps.meta.outputs.version }}.tar -C data/shards .
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: tar -cf "gnaf-shards-${VERSION}.tar" -C data/shards .
 
       - name: Create release notes
         if: env.TEST_SUFFIX == ''
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GNAF_RELEASE: ${{ steps.meta.outputs.gnaf_release }}
+          DATUM: ${{ steps.meta.outputs.datum }}
+          TOTAL: ${{ steps.meta.outputs.total }}
+          BUILT: ${{ steps.meta.outputs.date }}
         run: |
           cat > release-notes.md <<EOF
           ## GNAF Sharded Data
 
-          - **GNAF release**: ${{ steps.meta.outputs.gnaf_release }}
-          - **Version**: ${{ steps.meta.outputs.version }}
-          - **Datum**: ${{ steps.meta.outputs.datum }}
-          - **Total addresses**: ${{ steps.meta.outputs.total }}
-          - **Built**: ${{ steps.meta.outputs.date }}
-          - **Shard prefix length**: ${{ env.SHARD_PREFIX_LENGTH }}
+          - **GNAF release**: ${GNAF_RELEASE}
+          - **Version**: ${VERSION}
+          - **Datum**: ${DATUM}
+          - **Total addresses**: ${TOTAL}
+          - **Built**: ${BUILT}
+          - **Shard prefix length**: ${SHARD_PREFIX_LENGTH}
 
           ### Contents
 
@@ -369,11 +434,11 @@ jobs:
           ### Usage
 
           1. Download and extract the archive
-          2. Upload the contents to your S3-compatible bucket under \`gnaf/${{ steps.meta.outputs.version }}/\`
-          3. Create a \`gnaf/latest.json\` pointer: \`{"version": "${{ steps.meta.outputs.version }}"}\`
+          2. Upload the contents to your S3-compatible bucket under \`gnaf/${VERSION}/\`
+          3. Create a \`gnaf/latest.json\` pointer: \`{"version": "${VERSION}"}\`
           4. Configure the worker with your S3 endpoint and bucket
 
-          See the [README](https://github.com/${{ github.repository }}#using-pre-built-data) for details.
+          See the [README](https://github.com/${GITHUB_REPOSITORY}#using-pre-built-data) for details.
 
           ---
 
@@ -384,22 +449,25 @@ jobs:
         if: env.TEST_SUFFIX == ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          GNAF_RELEASE: ${{ steps.meta.outputs.gnaf_release }}
         run: |
-          gh release create "${{ steps.meta.outputs.version }}" \
-            --title "GNAF ${{ steps.meta.outputs.gnaf_release }} (${{ steps.meta.outputs.version }})" \
+          gh release create "$VERSION" \
+            --title "GNAF ${GNAF_RELEASE} (${VERSION})" \
             --notes-file release-notes.md \
-            gnaf-shards-${{ steps.meta.outputs.version }}.tar
+            "gnaf-shards-${VERSION}.tar"
 
       - name: Trigger deploy workflow
         if: env.TEST_SUFFIX == ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          gh workflow run deploy-gnaf.yml -f tag="${{ steps.meta.outputs.version }}"
+          gh workflow run deploy-gnaf.yml -f tag="$VERSION"
 
       - name: Delete artifacts
         if: always()
-        uses: geekyeggo/delete-artifact@v6
+        uses: geekyeggo/delete-artifact@176a747ab7e287e3ff4787bf8a148716375ca118 # v6.0.0
         with:
           name: |
             gnaf-duckdb
