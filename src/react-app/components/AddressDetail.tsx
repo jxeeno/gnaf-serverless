@@ -7,6 +7,9 @@ import { MapPin, FileJson, Table } from "lucide-react";
 import type { AddressResponse } from "../../shared/types";
 import { AddressMap } from "../AddressMap";
 
+/** A handful of buildings have thousands of units; don't render them all. */
+const SECONDARY_DISPLAY_LIMIT = 250;
+
 export function AddressDetail({ address }: { address: AddressResponse }) {
   return (
     <div className="space-y-6">
@@ -25,6 +28,13 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
             <Link to="/address/$gnafId" params={{ gnafId: address.alias.principalPid }}>
               <Badge variant="outline" className="text-xs hover:bg-muted">
                 Alias ({address.alias.type.name}) of <span className="font-mono ml-1">{address.alias.principalPid}</span>
+              </Badge>
+            </Link>
+          )}
+          {address.primary && (
+            <Link to="/address/$gnafId" params={{ gnafId: address.primary.pid }}>
+              <Badge variant="outline" className="text-xs hover:bg-muted">
+                Primary: <span className="font-mono ml-1">{address.primary.pid}</span>
               </Badge>
             </Link>
           )}
@@ -210,6 +220,33 @@ export function AddressDetail({ address }: { address: AddressResponse }) {
                       </React.Fragment>
                     ))}
                   </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {address.secondaries && address.secondaries.length > 0 && (
+              <Card className="sm:col-span-2">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium text-muted-foreground">
+                    Secondary addresses ({address.secondaries.length})
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                    {address.secondaries.slice(0, SECONDARY_DISPLAY_LIMIT).map((sec) => (
+                      <React.Fragment key={sec.pid}>
+                        <Link to="/address/$gnafId" params={{ gnafId: sec.pid }} className="font-mono text-xs underline underline-offset-2 hover:text-foreground text-muted-foreground">
+                          {sec.pid}
+                        </Link>
+                        <span>{sec.joinType.name}</span>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  {address.secondaries.length > SECONDARY_DISPLAY_LIMIT && (
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Showing the first {SECONDARY_DISPLAY_LIMIT} of {address.secondaries.length} — the full list is in the JSON tab.
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             )}

@@ -325,5 +325,18 @@ export function formatAddressResponse(
     }));
   }
 
+  if (r.sp) {
+    response.primary = {
+      pid: r.sp,
+      joinType: { code: r.sjc ?? "", name: r.sjn ?? "" },
+    };
+  }
+  if (r.sl?.length) {
+    response.secondaries = r.sl.map(([pid, code, name]) => ({
+      pid,
+      joinType: { code, name },
+    }));
+  }
+
   return response;
 }

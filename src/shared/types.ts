@@ -101,6 +101,14 @@ export interface ShardRecord {
   atn?: string;
   /** aliases of this address as [pid, alias_type_code, alias_type_name] (principal records only) */
   al?: [string, string, string][];
+  /** primary_pid — the parent address, e.g. the building (secondary records only) */
+  sp?: string;
+  /** ps_join_type_code (secondary records only) */
+  sjc?: string;
+  /** ps_join_type_name (secondary records only) */
+  sjn?: string;
+  /** secondary addresses of this address as [pid, ps_join_type_code, ps_join_type_name] (primary records only) */
+  sl?: [string, string, string][];
 }
 
 /** A shard file: map of GNAF PID → ShardRecord */
@@ -160,6 +168,16 @@ export interface AddressResponse {
   aliases?: {
     pid: string;
     type: { code: string; name: string };
+  }[];
+  /** Present when this is a secondary address (e.g. a unit within a building) */
+  primary?: {
+    pid: string;
+    joinType: { code: string; name: string };
+  };
+  /** Secondary addresses of this (primary) address, ordered by level then unit number */
+  secondaries?: {
+    pid: string;
+    joinType: { code: string; name: string };
   }[];
   sla: string;
   ssla?: string;

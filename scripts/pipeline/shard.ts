@@ -19,8 +19,8 @@ function n<T>(val: T | null | undefined): T | undefined {
   return val;
 }
 
-/** Decode import.ts alias_list ("pid|code|name;...") into shard tuples */
-function parseAliasList(val: unknown): [string, string, string][] | undefined {
+/** Decode an import.ts link list ("pid|code|name;...") into shard tuples */
+function parseLinkList(val: unknown): [string, string, string][] | undefined {
   if (typeof val !== "string" || val === "") return undefined;
   return val.split(";").map((entry) => {
     const [pid, code = "", name = ""] = entry.split("|");
@@ -80,8 +80,13 @@ export function toShardRecord(row: Record<string, unknown>): ShardRecord {
   if (n(row.principal_pid)) rec.pp = row.principal_pid as string;
   if (n(row.alias_type_code)) rec.atc = row.alias_type_code as string;
   if (n(row.alias_type_name)) rec.atn = row.alias_type_name as string;
-  const al = parseAliasList(row.alias_list);
+  const al = parseLinkList(row.alias_list);
   if (al) rec.al = al;
+  if (n(row.primary_pid)) rec.sp = row.primary_pid as string;
+  if (n(row.ps_join_type_code)) rec.sjc = row.ps_join_type_code as string;
+  if (n(row.ps_join_type_name)) rec.sjn = row.ps_join_type_name as string;
+  const sl = parseLinkList(row.secondary_list);
+  if (sl) rec.sl = sl;
 
   return rec;
 }
@@ -191,7 +196,11 @@ function shardRecordFromChunk(
   const pp = g("principal_pid"); if (n(pp)) rec.pp = pp as string;
   const atc = g("alias_type_code"); if (n(atc)) rec.atc = atc as string;
   const atn = g("alias_type_name"); if (n(atn)) rec.atn = atn as string;
-  const al = parseAliasList(g("alias_list")); if (al) rec.al = al;
+  const al = parseLinkList(g("alias_list")); if (al) rec.al = al;
+  const sp = g("primary_pid"); if (n(sp)) rec.sp = sp as string;
+  const sjc = g("ps_join_type_code"); if (n(sjc)) rec.sjc = sjc as string;
+  const sjn = g("ps_join_type_name"); if (n(sjn)) rec.sjn = sjn as string;
+  const sl = parseLinkList(g("secondary_list")); if (sl) rec.sl = sl;
 
   return rec;
 }
