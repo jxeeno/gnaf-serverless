@@ -1,6 +1,8 @@
 import { download } from "./download.js";
 import { importGnaf } from "./import.js";
 import { shard } from "./shard.js";
+import { generateSearchIndex } from "./search-index.js";
+import { precompute } from "./precompute.js";
 import { upload } from "./upload.js";
 
 async function main(): Promise<void> {
@@ -8,20 +10,31 @@ async function main(): Promise<void> {
 
   console.log("=== GNAF Pipeline ===\n");
 
-  console.log("Step 1/4: Download GNAF data");
+  console.log("Step 1/6: Download GNAF data");
   await download();
   console.log();
 
-  console.log("Step 2/4: Import into DuckDB");
+  console.log("Step 2/6: Import into DuckDB");
   const instance = await importGnaf();
   instance.closeSync();
   console.log();
 
-  console.log("Step 3/4: Shard data");
+  console.log("Step 3/6: Shard data");
   await shard();
   console.log();
 
-  console.log("Step 4/4: Upload to S3");
+  // Writes shards/streets/ and the D1 search index SQL. Without it, upload has
+  // no street shards to send and search/autocomplete has nothing to read.
+  console.log("Step 4/6: Generate search index");
+  await generateSearchIndex();
+  console.log();
+
+  // Reads shards/streets/, so it has to follow the search index.
+  console.log("Step 5/6: Pre-compute short queries");
+  await precompute();
+  console.log();
+
+  console.log("Step 6/6: Upload to S3");
   await upload();
   console.log();
 
