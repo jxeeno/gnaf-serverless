@@ -64,6 +64,40 @@ function byPid(a: { pid: string }, b: { pid: string }): number {
   return a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0;
 }
 
+interface Ranked {
+  pid: string;
+  streetId: number;
+  aliasOf?: string;
+  score: number;
+}
+
+/**
+ * Sort order for scored addresses: score, then principal before alias, then
+ * how well the address's street matched, then PID.
+ *
+ * The street step matters because an address score only measures the number
+ * match. When the query also names the suburb — "lot 3 pleasure point rd
+ * pleasure point" — every street in Pleasure Point matches the text, and a lot 3
+ * on Riverview Rd ties with the lot 3 on the street actually asked for. The
+ * street list is already ranked in SQL (FTS5 rank plus match bonuses), so each
+ * address takes its street's position in that list.
+ *
+ * `streetRank` maps street id to that position.
+ */
+export function compareScored(streetRank: ReadonlyMap<number, number>) {
+  const rankOf = (id: number) => streetRank.get(id) ?? Number.MAX_SAFE_INTEGER;
+  return (a: Ranked, b: Ranked): number =>
+    b.score - a.score ||
+    principalFirst(a, b) ||
+    rankOf(a.streetId) - rankOf(b.streetId) ||
+    byPid(a, b);
+}
+
+/** Position of each street in the SQL-ranked street list, keyed by street id. */
+function rankStreets(streets: readonly { id: number }[]): Map<number, number> {
+  return new Map(streets.map((s, i) => [s.id, i]));
+}
+
 export interface SearchMeta {
   d1RowsRead: number;
   d1Duration: number;
@@ -215,7 +249,7 @@ async function executeNumberOnlySearch(
     }
   }
 
-  scored.sort((a, b) => b.score - a.score || principalFirst(a, b) || byPid(a, b));
+  scored.sort(compareScored(rankStreets(matchedStreets)));
 
   // Diversify: 1 per street first, then backfill
   const seenStreets = new Set<number>();
@@ -520,7 +554,7 @@ export async function executeSearch(
   }
 
   // Sort by score descending, take top results
-  scoredAddresses.sort((a, b) => b.score - a.score || principalFirst(a, b) || byPid(a, b));
+  scoredAddresses.sort(compareScored(rankStreets(matchedStreets)));
 
   // When no numbers, first pick 1 per street for variety, then backfill remaining
   // slots with additional addresses from the same streets (highest scored first).
