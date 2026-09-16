@@ -1287,3 +1287,85 @@ describe("computeHighlightRanges", () => {
     expect(ranges).toContainEqual([10, 11]); // N
   });
 });
+
+// ──────────────────────────────────────────────
+// Lot numbers
+// ──────────────────────────────────────────────
+
+describe("lot numbers", () => {
+  const lotEntry: StreetAddressEntry = { p: "GANSW716671906", d: "LOT 11" };
+  const streetEntry: StreetAddressEntry = { p: "GANSW1", d: "11", n: 11 };
+
+  describe("parsing", () => {
+    it("keeps LOT out of the FTS query, where it matches no street", () => {
+      const r = parseSearchQuery("lot 11 lorne st lowanna")!;
+      expect(r.textTokens).not.toContain("LOT");
+      expect(r.ftsQuery).not.toContain("LOT");
+    });
+
+    it("reads the number after LOT as the lot, not the street number", () => {
+      const r = parseSearchQuery("lot 11 lorne st lowanna")!;
+      expect(r.lotHint).toBe(11);
+      expect(r.streetHint).toBeNull();
+      expect(r.flatHint).toBeNull();
+    });
+
+    it("keeps a lot and a street number apart", () => {
+      const r = parseSearchQuery("lot 11 42 smith st")!;
+      expect(r.lotHint).toBe(11);
+      expect(r.streetHint).toBe(42);
+    });
+
+    it("does not treat a lot number as the flat in the two-number rule", () => {
+      const r = parseSearchQuery("lot 3 5 murray st")!;
+      expect(r.lotHint).toBe(3);
+      expect(r.streetHint).toBe(5);
+      expect(r.flatHint).toBeNull();
+    });
+
+    it("preserves an alphanumeric lot as typed", () => {
+      const r = parseSearchQuery("lot 12a lorne st")!;
+      expect(r.lotHint).toBe(12);
+      expect(r.lotDisplayHint).toBe("12A");
+    });
+
+    it("returns null when LOT leaves no street to search for", () => {
+      expect(parseSearchQuery("lot 11")).toBeNull();
+    });
+
+    it("leaves queries without a lot keyword untouched", () => {
+      const r = parseSearchQuery("11 lorne st lowanna")!;
+      expect(r.lotHint).toBeNull();
+      expect(r.streetHint).toBe(11);
+    });
+  });
+
+  describe("scoring", () => {
+    it("ranks an exact lot match top", () => {
+      const parsed = parseSearchQuery("lot 11 lorne st lowanna")!;
+      expect(scoreAddress(lotEntry, parsed)).toBe(200);
+    });
+
+    it("matches a lot sitting behind a unit in the display", () => {
+      const parsed = parseSearchQuery("lot 11 lorne st")!;
+      expect(scoreAddress({ p: "X", d: "UNIT 3, LOT 11" }, parsed)).toBe(200);
+    });
+
+    it("does not match a different lot", () => {
+      const parsed = parseSearchQuery("lot 11 lorne st")!;
+      expect(scoreAddress({ p: "X", d: "LOT 12" }, parsed)).toBeLessThan(200);
+    });
+
+    it("still surfaces an address whose street number equals the lot asked for", () => {
+      const parsed = parseSearchQuery("lot 11 lorne st")!;
+      expect(scoreAddress(streetEntry, parsed)).toBe(90);
+    });
+
+    it("does not confuse LOT 11 with street number 11 in ranking", () => {
+      const parsed = parseSearchQuery("lot 11 lorne st")!;
+      expect(scoreAddress(lotEntry, parsed)).toBeGreaterThan(
+        scoreAddress(streetEntry, parsed)
+      );
+    });
+  });
+});

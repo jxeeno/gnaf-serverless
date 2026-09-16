@@ -230,6 +230,13 @@ export const LEVEL_KEYWORDS: Set<string> = new Set(
   LEVEL_TYPE_PAIRS.flat()
 );
 
+/**
+ * Keywords introducing a lot number. A lot is neither a flat nor a level — it
+ * identifies the parcel rather than a sub-address — so it gets its own set and
+ * never feeds the flat/level inference.
+ */
+export const LOT_KEYWORDS: Set<string> = new Set(["LOT"]);
+
 /** Keywords that specifically indicate a flat/unit (as opposed to a level) */
 export const FLAT_KEYWORDS: Set<string> = new Set([
   "UNIT", "U", "UN",
