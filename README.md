@@ -133,6 +133,34 @@ A principal address lists its aliases:
 
 Alias types: `SYN` synonym, `RA` ranged address, `LD` level duplication, `FNNFS` flat number vs number-suffix (e.g. 1/25 vs 25A), `FPS` flat prefix/suffix (e.g. 2B vs B2), `CD` contributor defined.
 
+#### Primary and secondary addresses
+
+GNAF links the sub-addresses of a site (the units in an apartment building, the shops in a centre) to the site's own address via `PRIMARY_SECONDARY`. The `precedence` field says whether an address is a `primary` or a `secondary`; these fields say which addresses it is linked to.
+
+A secondary address points at its primary:
+
+```json
+"precedence": "secondary",
+"primary": {
+  "pid": "GANSW717928588",
+  "joinType": { "code": "1", "name": "AUTO" }
+}
+```
+
+A primary address lists its secondaries, ordered by level then unit number:
+
+```json
+"precedence": "primary",
+"secondaries": [
+  { "pid": "GANSW717928480", "joinType": { "code": "1", "name": "AUTO" } },
+  { "pid": "GANSW717928483", "joinType": { "code": "1", "name": "AUTO" } }
+]
+```
+
+Join types: `1` AUTO (matched automatically; parent and child share the same root address), `2` MANUAL (manually created link, which may not share a root address).
+
+The hierarchy is one level deep — no address is both a primary and a secondary, and each secondary has exactly one primary. A handful of large buildings have thousands of secondaries, so `secondaries` can be long; the web UI shows the first 250.
+
 ## Development
 
 Install dependencies:
@@ -182,7 +210,7 @@ Or run the steps individually, in this order:
 
 ```bash
 npm run pipeline:download      # Download GNAF ZIP from data.gov.au
-npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includes address aliases)
+npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includes address aliases and primary/secondary links)
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
 npm run pipeline:precompute    # Pre-compute short query results (requires search-index)

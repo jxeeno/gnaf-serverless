@@ -99,6 +99,7 @@ export async function importGnaf(): Promise<DuckDBInstance> {
     "MB_2016",
     "MB_2021",
     "ADDRESS_ALIAS",
+    "PRIMARY_SECONDARY",
   ];
 
   // Tables that need all states regardless of filter (reference/lookup data)
@@ -118,6 +119,7 @@ export async function importGnaf(): Promise<DuckDBInstance> {
     "GEOCODE_RELIABILITY_AUT",
     "LOCALITY_CLASS_AUT",
     "ADDRESS_ALIAS_TYPE_AUT",
+    "PS_JOIN_TYPE_AUT",
   ];
 
   // Import state-specific tables (filtered by GNAF_STATES)
@@ -353,6 +355,72 @@ export async function importGnaf(): Promise<DuckDBInstance> {
   result = await conn.run(`SELECT count(*) as cnt FROM address_alias_lookup`);
   rows = await result.getRows();
   console.log(`  → ${rows[0][0]} alias links`);
+
+  // Step 4: Link secondary addresses (units in a building) to their primary
+  // (the building), in both directions. GNAF's PRIMARY_SECONDARY is a
+  // single-level forest: no PID is both a primary and a secondary, and each
+  // secondary has exactly one primary. The QUALIFY is insurance in case that
+  // ever changes. As with aliases, only pairs where both addresses survived the
+  // join above are kept, so links never dangle.
+  console.log("Linking primary/secondary addresses...");
+  await run(`
+    CREATE OR REPLACE TABLE primary_secondary_lookup AS
+    SELECT
+      ps.primary_pid,
+      ps.secondary_pid,
+      ps.ps_join_type_code,
+      pjt.name AS ps_join_type_name
+    FROM primary_secondary AS ps
+    LEFT JOIN ps_join_type_aut AS pjt ON ps.ps_join_type_code = pjt.code
+    WHERE (ps.date_retired IS NULL OR ps.date_retired = '')
+      AND ps.primary_pid IN (SELECT gnaf_pid FROM addresses)
+      AND ps.secondary_pid IN (SELECT gnaf_pid FROM addresses)
+    QUALIFY row_number() OVER (
+      PARTITION BY ps.secondary_pid
+      ORDER BY ps.date_created DESC, ps.primary_secondary_pid
+    ) = 1
+  `);
+
+  await run(`ALTER TABLE addresses ADD COLUMN primary_pid VARCHAR`);
+  await run(`ALTER TABLE addresses ADD COLUMN ps_join_type_code VARCHAR`);
+  await run(`ALTER TABLE addresses ADD COLUMN ps_join_type_name VARCHAR`);
+  // Encoded as "pid|code|name;pid|code|name" — decoded in shard.ts
+  await run(`ALTER TABLE addresses ADD COLUMN secondary_list VARCHAR`);
+
+  await run(`
+    UPDATE addresses
+    SET primary_pid = l.primary_pid,
+        ps_join_type_code = l.ps_join_type_code,
+        ps_join_type_name = l.ps_join_type_name
+    FROM primary_secondary_lookup AS l
+    WHERE addresses.gnaf_pid = l.secondary_pid
+  `);
+
+  // Ordered by level then unit number so the list reads like the building does.
+  // Materialised separately because the aggregate reads `addresses`, which the
+  // UPDATE below writes to.
+  await run(`
+    CREATE OR REPLACE TABLE primary_secondary_agg AS
+    SELECT
+      l.primary_pid,
+      string_agg(
+        l.secondary_pid || '|' || COALESCE(l.ps_join_type_code, '') || '|' || COALESCE(l.ps_join_type_name, ''),
+        ';' ORDER BY a.level_number NULLS FIRST, a.flat_number NULLS FIRST, l.secondary_pid
+      ) AS secondary_list
+    FROM primary_secondary_lookup AS l
+    INNER JOIN addresses AS a ON l.secondary_pid = a.gnaf_pid
+    GROUP BY l.primary_pid
+  `);
+  await run(`
+    UPDATE addresses
+    SET secondary_list = p.secondary_list
+    FROM primary_secondary_agg AS p
+    WHERE addresses.gnaf_pid = p.primary_pid
+  `);
+
+  result = await conn.run(`SELECT count(*) as cnt FROM primary_secondary_lookup`);
+  rows = await result.getRows();
+  console.log(`  → ${rows[0][0]} primary/secondary links`);
 
   conn.disconnectSync();
   return instance;

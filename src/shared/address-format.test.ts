@@ -55,3 +55,42 @@ describe("formatAddressResponse aliases", () => {
     ]);
   });
 });
+
+describe("formatAddressResponse primary/secondary links", () => {
+  it("omits link fields when not linked", () => {
+    const res = formatAddressResponse("GANSW1", base);
+    expect(res.primary).toBeUndefined();
+    expect(res.secondaries).toBeUndefined();
+  });
+
+  it("includes the primary for secondary records", () => {
+    const res = formatAddressResponse("GANSW717928552", {
+      ...base,
+      ps: "S",
+      sp: "GANSW717928588",
+      sjc: "1",
+      sjn: "AUTO",
+    });
+    expect(res.precedence).toBe("secondary");
+    expect(res.primary).toEqual({
+      pid: "GANSW717928588",
+      joinType: { code: "1", name: "AUTO" },
+    });
+  });
+
+  it("lists secondaries for primary records", () => {
+    const res = formatAddressResponse("GANSW717928588", {
+      ...base,
+      ps: "P",
+      sl: [
+        ["GANSW717928480", "1", "AUTO"],
+        ["GANSW717928483", "2", "MANUAL"],
+      ],
+    });
+    expect(res.precedence).toBe("primary");
+    expect(res.secondaries).toEqual([
+      { pid: "GANSW717928480", joinType: { code: "1", name: "AUTO" } },
+      { pid: "GANSW717928483", joinType: { code: "2", name: "MANUAL" } },
+    ]);
+  });
+});

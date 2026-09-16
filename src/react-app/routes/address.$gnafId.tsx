@@ -1,9 +1,7 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ChevronLeft, Loader2, Copy, Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { AddressDetail } from "../components/AddressDetail";
+import { AddressDetail, type DetailTiming } from "../components/AddressDetail";
+import { Container, StatePanel } from "../components/blade";
 import type { AddressResponse } from "../../shared/types";
 
 export const Route = createFileRoute("/address/$gnafId")({
@@ -13,6 +11,7 @@ export const Route = createFileRoute("/address/$gnafId")({
 function AddressPage() {
   const { gnafId } = Route.useParams();
   const [address, setAddress] = useState<AddressResponse | null>(null);
+  const [timing, setTiming] = useState<DetailTiming | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -22,6 +21,8 @@ function AddressPage() {
     setLoading(true);
     setError(null);
     setAddress(null);
+    setTiming(null);
+    const started = performance.now();
 
     fetch(`/api/addresses/${encodeURIComponent(gnafId)}`)
       .then(async (res) => {
@@ -32,7 +33,9 @@ function AddressPage() {
         return res.json();
       })
       .then((data: AddressResponse) => {
-        if (!cancelled) setAddress(data);
+        if (cancelled) return;
+        setAddress(data);
+        setTiming({ totalMs: performance.now() - started });
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -47,51 +50,42 @@ function AddressPage() {
   }, [gnafId]);
 
   const handleCopy = () => {
-    if (address) {
-      navigator.clipboard.writeText(address.sla);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
+    if (!address) return;
+    navigator.clipboard.writeText(address.sla);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <Link to="/">
-          <Button variant="ghost" size="sm">
-            <ChevronLeft className="h-4 w-4 mr-1" /> Search
-          </Button>
+    <>
+      <div className="border-b border-hairline bg-cream-panel">
+        <Container className="flex items-center justify-between gap-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.1em]">
+        <Link to="/" className="text-ink no-underline hover:text-blade">
+          ← Back to search
         </Link>
         {address && (
-          <Button variant="ghost" size="sm" onClick={handleCopy} className="gap-1.5 text-muted-foreground">
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {copied ? "Copied" : "Copy address"}
-          </Button>
+          <button type="button" onClick={handleCopy} className="font-bold uppercase text-blade">
+            {copied ? "Copied ✓" : "Copy address ⧉"}
+          </button>
         )}
+        </Container>
       </div>
 
-      {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      )}
+      <Container className="py-6 sm:py-7">
+        {loading && (
+          <StatePanel kind="loading" heading="Fetching shard" detail={gnafId}>
+            Reading one of 4,096 R2 shards.
+          </StatePanel>
+        )}
 
-      {error && (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6">
-            <p className="text-sm text-destructive">{error}</p>
-            <p className="text-xs text-muted-foreground mt-2 font-mono">{gnafId}</p>
-          </CardContent>
-        </Card>
-      )}
+        {error && (
+          <StatePanel kind="error" heading="No such address" detail={gnafId}>
+            {error} — check the PID, or search for the address instead.
+          </StatePanel>
+        )}
 
-      {address && (
-        <Card>
-          <CardContent className="pt-6">
-            <AddressDetail address={address} />
-          </CardContent>
-        </Card>
-      )}
-    </div>
+        {address && <AddressDetail address={address} timing={timing ?? undefined} />}
+      </Container>
+    </>
   );
 }
