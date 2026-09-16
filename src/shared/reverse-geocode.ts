@@ -8,10 +8,11 @@ import { readFgbLayout, type FgbLayout, type ReadRange } from "./fgb.js";
  * Nearest-address search over the reverse-geocode FlatGeobuf, read through
  * range requests.
  *
- * Every index node carries the bounding box of what sits under it, and a leaf's
- * box is its point. So the search finds candidates and ranks them by distance
- * from the tree alone, and only reads features — to learn their PIDs — for the
- * handful that win.
+ * It is a best-first search of the packed R-tree. It always expands whichever
+ * node could hold the closest point, and stops once nothing left could beat the
+ * answers already found. Every node carries the box of what sits under it, and
+ * a leaf's box is its point, so distances come from the tree alone. Features are
+ * read, for their PIDs, only for the addresses returned.
  */
 
 export interface NearestAddress {
@@ -35,101 +36,167 @@ export interface ReadCounter {
   bytes: number;
 }
 
-/** Thrown when a search box holds more points than a request should touch. */
+export interface GeoIndexOptions {
+  /** Hold the top of the tree in memory: whole levels, up to this many bytes */
+  prefixBudgetBytes?: number;
+  /** Keep recently read tree pages in memory, up to this many bytes */
+  pageCacheBytes?: number;
+}
+
+/** Thrown when a query would read more of the index than a request should. */
 export class SearchAreaTooLargeError extends Error {}
 
 const EARTH_RADIUS_M = 6_371_008.8;
-const METRES_PER_DEGREE = (EARTH_RADIUS_M * Math.PI) / 180;
-
-/** Start small: in a city a 25 m box already holds the answer. */
-const START_HALF_WIDTH_M = 25;
+const DEG = Math.PI / 180;
 
 /**
- * A safety net, not a tuning knob. Doubling the box each step means a search
- * reaches this only if one step jumps from too few points to tens of thousands.
- */
-const MAX_CANDIDATES = 20_000;
-
-/**
- * Hold the top of the tree in memory, up to this size. For the ~10.7M-point
- * index that is the top five of seven levels (~1.8 MiB), so a search reads two
- * tree levels from storage instead of seven.
+ * For the ~10.7M-point index this holds the top five of seven levels (~1.8 MiB),
+ * so a search reads at most two levels from storage.
  */
 const DEFAULT_PREFIX_BUDGET_BYTES = 4 * 1024 * 1024;
 
-/** Nodes this close together are read in one request rather than two. */
-const NODE_MERGE_GAP = 16;
+/** Tree pages never change, so recently read ones are worth keeping. */
+const DEFAULT_PAGE_CACHE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Pages or feature runs fetched at once. A Worker invocation can hold six
+ * connections open, so this leaves room for the rest of the request.
+ */
+const CONCURRENT_READS = 4;
+
+/** A safety net: an ordinary query reads a handful of pages, not thousands. */
+const MAX_STORED_PAGES_PER_QUERY = 2_000;
 
 /** Features this close together (in bytes) are read in one request. */
 const FEATURE_MERGE_GAP_BYTES = 8 * 1024;
 
-interface Candidate {
+/** A tree node whose children haven't been read yet. */
+interface NodeEntry {
+  kind: "node";
+  /** How close anything under this node could be, in metres */
+  bound: number;
+  /** Level of this node; 0 is the leaves */
+  level: number;
+  /** Index of its first child, one level down */
+  firstChild: number;
+}
+
+/** An address point, found in a leaf. */
+interface PointEntry {
+  kind: "point";
+  /** Its exact distance, in metres */
+  bound: number;
   x: number;
   y: number;
-  /** Offset of the feature within the features section */
+  /** Offset of its feature within the features section */
   offset: number;
-  /** Byte length of the feature, including its 4-byte length prefix */
+  /** Byte length of its feature, including the 4-byte length prefix */
   length: number;
 }
 
-interface Rect {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
+type Entry = NodeEntry | PointEntry;
 
 /** Great-circle (haversine) distance in metres. */
 export function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const toRad = Math.PI / 180;
-  const dLat = (lat2 - lat1) * toRad;
-  const dLng = (lng2 - lng1) * toRad;
+  const dLat = (lat2 - lat1) * DEG;
+  const dLng = (lng2 - lng1) * DEG;
   const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2;
+    Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * DEG) * Math.cos(lat2 * DEG) * Math.sin(dLng / 2) ** 2;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
 /**
- * A lat/lng box that contains every point within `halfWidth` metres.
+ * A lower bound on the distance from a point to anywhere in a lat/lng box.
  *
- * It uses the same sphere as haversineMetres, padded by 1%. A great circle
- * bows slightly poleward of a parallel, so an unpadded box can miss a point at
- * almost exactly `halfWidth` east or west.
+ * It takes the gap to the box in each direction, measuring longitude with the
+ * cosine of the most poleward latitude involved (where degrees of longitude are
+ * shortest), then takes off 1%. That keeps it at or under the true great-circle
+ * distance, so the search never passes over a node that holds a closer point.
+ * It never shrinks for a box inside another, which keeps results in order.
  */
-function boxAround(lat: number, lng: number, halfWidth: number): Rect {
-  const padded = halfWidth * 1.01;
-  const dLat = padded / METRES_PER_DEGREE;
-  const cosLat = Math.max(Math.cos((lat * Math.PI) / 180), 1e-6);
-  const dLng = padded / (METRES_PER_DEGREE * cosLat);
-  return {
-    minX: lng - dLng,
-    maxX: lng + dLng,
-    minY: Math.max(lat - dLat, -90),
-    maxY: Math.min(lat + dLat, 90),
-  };
+function boxLowerBound(
+  lat: number,
+  lng: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number
+): number {
+  const gapLat = lat < minY ? minY - lat : lat > maxY ? lat - maxY : 0;
+  const gapLng = lng < minX ? minX - lng : lng > maxX ? lng - maxX : 0;
+  if (gapLat === 0 && gapLng === 0) return 0;
+  const poleward = Math.min(Math.max(Math.abs(lat), Math.abs(minY), Math.abs(maxY)), 90);
+  const eastWest = Math.cos(poleward * DEG) * gapLng;
+  return 0.99 * EARTH_RADIUS_M * DEG * Math.hypot(gapLat, eastWest);
 }
 
-/** Merge sorted-or-not [start, end) ranges whose gap is at most `gap`. */
-function mergeRanges(ranges: Array<[number, number]>, gap: number): Array<[number, number]> {
-  if (ranges.length < 2) return ranges;
-  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
-  const out: Array<[number, number]> = [[sorted[0][0], sorted[0][1]]];
-  for (const [start, end] of sorted.slice(1)) {
-    const last = out[out.length - 1];
-    if (start - last[1] <= gap) {
-      last[1] = Math.max(last[1], end);
-    } else {
-      out.push([start, end]);
+class MinHeap<T extends { bound: number }> {
+  private readonly items: T[] = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  peek(): T | undefined {
+    return this.items[0];
+  }
+
+  push(item: T): void {
+    const items = this.items;
+    items.push(item);
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (items[parent].bound <= items[i].bound) break;
+      [items[parent], items[i]] = [items[i], items[parent]];
+      i = parent;
     }
   }
-  return out;
+
+  pop(): T | undefined {
+    const items = this.items;
+    const top = items[0];
+    const last = items.pop();
+    if (items.length > 0 && last !== undefined) {
+      items[0] = last;
+      let i = 0;
+      for (;;) {
+        const left = 2 * i + 1;
+        const right = left + 1;
+        let smallest = i;
+        if (left < items.length && items[left].bound < items[smallest].bound) smallest = left;
+        if (right < items.length && items[right].bound < items[smallest].bound) smallest = right;
+        if (smallest === i) break;
+        [items[smallest], items[i]] = [items[i], items[smallest]];
+        i = smallest;
+      }
+    }
+    return top;
+  }
+}
+
+/** Run `fn` over `items`, at most `limit` at a time. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export class GeoIndex {
   /** Range requests made since the index was opened, including opening it */
   reads = 0;
   bytesRead = 0;
+
+  /** Tree pages read recently, by first node and count, least recently used first */
+  private readonly pages = new Map<string, { bytes: number; view: Promise<DataView> }>();
+  private pageBytes = 0;
 
   private constructor(
     private readonly source: ReadRange,
@@ -139,7 +206,8 @@ export class GeoIndex {
     private readonly levels: Array<[number, number]>,
     /** The first `prefixNodes` nodes of the tree, held in memory */
     private readonly prefix: DataView,
-    private readonly prefixNodes: number
+    private readonly prefixNodes: number,
+    private readonly pageCacheBytes: number
   ) {}
 
   /**
@@ -149,7 +217,10 @@ export class GeoIndex {
   static async open(
     source: ReadRange,
     fileBytes: number,
-    { prefixBudgetBytes = DEFAULT_PREFIX_BUDGET_BYTES } = {}
+    {
+      prefixBudgetBytes = DEFAULT_PREFIX_BUDGET_BYTES,
+      pageCacheBytes = DEFAULT_PAGE_CACHE_BYTES,
+    }: GeoIndexOptions = {}
   ): Promise<GeoIndex> {
     let reads = 0;
     let bytesRead = 0;
@@ -186,10 +257,192 @@ export class GeoIndex {
         ? new DataView(await counted(layout.treeOffset, prefixNodes * NODE_ITEM_BYTE_LEN))
         : new DataView(new ArrayBuffer(0));
 
-    const index = new GeoIndex(source, layout, fileBytes, levels, prefix, prefixNodes);
+    const index = new GeoIndex(
+      source,
+      layout,
+      fileBytes,
+      levels,
+      prefix,
+      prefixNodes,
+      pageCacheBytes
+    );
     index.reads = reads;
     index.bytesRead = bytesRead;
     return index;
+  }
+
+  get featuresCount(): number {
+    return this.layout.header.featuresCount;
+  }
+
+  /**
+   * The nearest addresses to a point, closest first, with ties broken by PID.
+   * Pass `counter` to count the range requests this one query makes; the totals
+   * on the index are shared by every query it serves.
+   */
+  async nearest(
+    lat: number,
+    lng: number,
+    { limit, maxRadius }: NearestOptions,
+    counter?: ReadCounter
+  ): Promise<NearestAddress[]> {
+    const queue = new MinHeap<Entry>();
+    const found: PointEntry[] = [];
+    let storedPages = 0;
+
+    // The root has no parent to carry its box, so start from a stand-in parent
+    // one level above it, whose only child is the root.
+    queue.push({ kind: "node", bound: 0, level: this.levels.length, firstChild: 0 });
+
+    // Anything further than this can't make the answer. Points leave the queue
+    // closest first, so once `limit` are found the last of them sets the bar.
+    const bar = () => (found.length >= limit ? found[limit - 1].bound : maxRadius);
+
+    for (;;) {
+      const batch: NodeEntry[] = [];
+      while (batch.length < CONCURRENT_READS) {
+        const top = queue.peek();
+        // `<=`, not `<`: an entry level with the bar may hold a tie, which the
+        // PID tiebreak below needs to see.
+        if (!top || top.bound > bar()) break;
+        if (top.kind === "point") {
+          // A node already taken this round might hold something closer, so
+          // expand it before accepting any point.
+          if (batch.length > 0) break;
+          found.push(queue.pop() as PointEntry);
+        } else {
+          batch.push(queue.pop() as NodeEntry);
+        }
+      }
+      if (batch.length === 0) break;
+
+      for (const node of batch) {
+        if (this.levels[node.level - 1][1] > this.prefixNodes) storedPages++;
+      }
+      if (storedPages > MAX_STORED_PAGES_PER_QUERY) {
+        throw new SearchAreaTooLargeError(
+          "The search had to read too much of the index; use a smaller radius"
+        );
+      }
+
+      const children = await Promise.all(
+        batch.map((node) => this.children(node, lat, lng, counter))
+      );
+      for (const entries of children) {
+        for (const entry of entries) {
+          if (entry.bound <= maxRadius) queue.push(entry);
+        }
+      }
+    }
+
+    if (found.length === 0) return [];
+
+    // Every point level with the last place is in `found`, so ties can be broken
+    // by PID now the PIDs are about to be known.
+    const cutoff = found[Math.min(limit, found.length) - 1].bound;
+    const chosen = found.filter((p) => p.bound <= cutoff);
+    const pids = await this.readPids(chosen, counter);
+
+    return chosen
+      .map((p, i) => ({ pid: pids[i], lat: p.y, lng: p.x, distance: p.bound }))
+      .sort((a, b) => a.distance - b.distance || (a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0))
+      .slice(0, limit);
+  }
+
+  /** The children of a node, each with its distance bound from the query point. */
+  private async children(
+    node: NodeEntry,
+    lat: number,
+    lng: number,
+    counter?: ReadCounter
+  ): Promise<Entry[]> {
+    const level = node.level - 1;
+    const levelEnd = this.levels[level][1];
+    const start = node.firstChild;
+    const end = Math.min(start + this.layout.header.indexNodeSize, levelEnd);
+    const isLeaf = level === 0;
+    // At the leaves, read one node further so the last child's feature length
+    // can be worked out from where the next feature starts.
+    const readEnd = isLeaf ? Math.min(end + 1, levelEnd) : end;
+    const view = await this.readNodes(start, readEnd - start, counter);
+
+    const out: Entry[] = [];
+    for (let i = start; i < end; i++) {
+      const o = (i - start) * NODE_ITEM_BYTE_LEN;
+      const minX = view.getFloat64(o, true);
+      const minY = view.getFloat64(o + 8, true);
+      const maxX = view.getFloat64(o + 16, true);
+      const maxY = view.getFloat64(o + 24, true);
+      const offset = Number(view.getBigUint64(o + 32, true));
+
+      if (isLeaf) {
+        const nextOffset =
+          i + 1 < levelEnd
+            ? Number(view.getBigUint64(o + NODE_ITEM_BYTE_LEN + 32, true))
+            : this.fileBytes - this.layout.featuresOffset;
+        out.push({
+          kind: "point",
+          bound: haversineMetres(lat, lng, minY, minX),
+          x: minX,
+          y: minY,
+          offset,
+          length: nextOffset - offset,
+        });
+      } else {
+        // An inner node's offset is the index of its first child.
+        out.push({
+          kind: "node",
+          bound: boxLowerBound(lat, lng, minX, minY, maxX, maxY),
+          level,
+          firstChild: offset,
+        });
+      }
+    }
+    return out;
+  }
+
+  private readNodes(start: number, count: number, counter?: ReadCounter): Promise<DataView> {
+    // Pages sit wholly inside or outside the prefix, which ends on a level boundary.
+    if (start + count <= this.prefixNodes) {
+      return Promise.resolve(
+        new DataView(
+          this.prefix.buffer,
+          this.prefix.byteOffset + start * NODE_ITEM_BYTE_LEN,
+          count * NODE_ITEM_BYTE_LEN
+        )
+      );
+    }
+
+    const key = `${start}:${count}`;
+    const cached = this.pages.get(key);
+    if (cached) {
+      // Move it to the most recently used end.
+      this.pages.delete(key);
+      this.pages.set(key, cached);
+      return cached.view;
+    }
+
+    const bytes = count * NODE_ITEM_BYTE_LEN;
+    const view = this.read(this.layout.treeOffset + start * NODE_ITEM_BYTE_LEN, bytes, counter).then(
+      (buf) => new DataView(buf)
+    );
+    const entry = { bytes, view };
+    // Stored as a promise, so queries that want the same page share one read.
+    this.pages.set(key, entry);
+    this.pageBytes += bytes;
+    view.catch(() => this.forgetPage(key, entry));
+
+    for (const [oldKey, old] of this.pages) {
+      if (this.pageBytes <= this.pageCacheBytes || old === entry) break;
+      this.forgetPage(oldKey, old);
+    }
+    return view;
+  }
+
+  private forgetPage(key: string, entry: { bytes: number }): void {
+    if (this.pages.get(key) !== entry) return;
+    this.pages.delete(key);
+    this.pageBytes -= entry.bytes;
   }
 
   private async read(offset: number, length: number, counter?: ReadCounter): Promise<ArrayBuffer> {
@@ -202,164 +455,34 @@ export class GeoIndex {
     return this.source(offset, length);
   }
 
-  get featuresCount(): number {
-    return this.layout.header.featuresCount;
-  }
+  /** Read the PID of each point, fetching features that sit close together in one request. */
+  private async readPids(points: PointEntry[], counter?: ReadCounter): Promise<string[]> {
+    const order = points
+      .map((point, i) => ({ point, i }))
+      .sort((a, b) => a.point.offset - b.point.offset);
 
-  /**
-   * The nearest addresses to a point, closest first. Pass `counter` to count the
-   * range requests this one query makes; the totals on the index are shared by
-   * every query it serves.
-   */
-  async nearest(
-    lat: number,
-    lng: number,
-    { limit, maxRadius }: NearestOptions,
-    counter?: ReadCounter
-  ): Promise<NearestAddress[]> {
-    // Grow the box until it holds enough points or reaches the radius limit.
-    let halfWidth = Math.min(START_HALF_WIDTH_M, maxRadius);
-    let candidates = await this.searchBox(boxAround(lat, lng, halfWidth), counter);
-    while (candidates.length < limit && halfWidth < maxRadius) {
-      halfWidth = Math.min(halfWidth * 2, maxRadius);
-      candidates = await this.searchBox(boxAround(lat, lng, halfWidth), counter);
-    }
-
-    let ranked = this.rank(candidates, lat, lng);
-
-    // A square box can hold the k nearest points while missing a closer one
-    // just outside its edge, because its corners reach further than its sides.
-    // If the k-th point is further than the box's half-width, search again with
-    // a box that contains that whole distance.
-    if (ranked.length >= limit) {
-      const kth = ranked[limit - 1].distance;
-      const needed = Math.min(kth, maxRadius);
-      if (needed > halfWidth) {
-        ranked = this.rank(await this.searchBox(boxAround(lat, lng, needed), counter), lat, lng);
+    const runs: Array<typeof order> = [];
+    for (const entry of order) {
+      const run = runs[runs.length - 1];
+      const last = run?.[run.length - 1];
+      if (last && entry.point.offset - (last.point.offset + last.point.length) <= FEATURE_MERGE_GAP_BYTES) {
+        run.push(entry);
+      } else {
+        runs.push([entry]);
       }
     }
 
-    const within = ranked.filter((c) => c.distance <= maxRadius);
-    if (within.length === 0) return [];
-
-    // Include every point tied with the last place, so ties can be broken by PID
-    // once the PIDs are known. Otherwise the choice among them would depend on
-    // tree order.
-    const cutoff = within[Math.min(limit, within.length) - 1].distance;
-    const chosen = within.filter((c) => c.distance <= cutoff);
-    const pids = await this.readPids(chosen, counter);
-
-    return chosen
-      .map((c, i) => ({ pid: pids[i], lat: c.y, lng: c.x, distance: c.distance }))
-      .sort((a, b) => a.distance - b.distance || (a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0))
-      .slice(0, limit);
-  }
-
-  private rank(candidates: Candidate[], lat: number, lng: number) {
-    return candidates
-      .map((c) => ({ ...c, distance: haversineMetres(lat, lng, c.y, c.x) }))
-      .sort((a, b) => a.distance - b.distance);
-  }
-
-  private async readNodes(start: number, count: number, counter?: ReadCounter): Promise<DataView> {
-    if (start + count <= this.prefixNodes) {
-      return new DataView(
-        this.prefix.buffer,
-        this.prefix.byteOffset + start * NODE_ITEM_BYTE_LEN,
-        count * NODE_ITEM_BYTE_LEN
-      );
-    }
-    return new DataView(
-      await this.read(
-        this.layout.treeOffset + start * NODE_ITEM_BYTE_LEN,
-        count * NODE_ITEM_BYTE_LEN,
-        counter
-      )
-    );
-  }
-
-  /** Every point inside `rect`, read level by level from the root. */
-  private async searchBox(rect: Rect, counter?: ReadCounter): Promise<Candidate[]> {
-    const { levels } = this;
-    const nodeSize = this.layout.header.indexNodeSize;
-    const found: Candidate[] = [];
-    let ranges: Array<[number, number]> = [[0, 1]];
-
-    for (let level = levels.length - 1; level >= 0 && ranges.length > 0; level--) {
-      const isLeaf = level === 0;
-      const levelEnd = levels[level][1];
-      const next: Array<[number, number]> = [];
-
-      // Reading a gap between wanted nodes is harmless: a node that overlaps the
-      // box always sits under a parent that overlaps it, so any gap node that
-      // matches would have been visited anyway.
-      for (const [start, wantedEnd] of mergeRanges(ranges, NODE_MERGE_GAP)) {
-        // At the leaves, read one node further so the last hit's feature
-        // length can be worked out from where the next feature starts.
-        const end = isLeaf ? Math.min(wantedEnd + 1, levelEnd) : wantedEnd;
-        const view = await this.readNodes(start, end - start, counter);
-
-        for (let i = start; i < wantedEnd; i++) {
-          const o = (i - start) * NODE_ITEM_BYTE_LEN;
-          const minX = view.getFloat64(o, true);
-          const minY = view.getFloat64(o + 8, true);
-          const maxX = view.getFloat64(o + 16, true);
-          const maxY = view.getFloat64(o + 24, true);
-          if (maxX < rect.minX || maxY < rect.minY || minX > rect.maxX || minY > rect.maxY) {
-            continue;
-          }
-          const offset = Number(view.getBigUint64(o + 32, true));
-
-          if (!isLeaf) {
-            // An inner node's offset is the index of its first child.
-            next.push([offset, Math.min(offset + nodeSize, levels[level - 1][1])]);
-            continue;
-          }
-
-          const nextOffset =
-            i + 1 < levelEnd
-              ? Number(view.getBigUint64(o + NODE_ITEM_BYTE_LEN + 32, true))
-              : this.fileBytes - this.layout.featuresOffset;
-          found.push({ x: minX, y: minY, offset, length: nextOffset - offset });
-          if (found.length > MAX_CANDIDATES) {
-            throw new SearchAreaTooLargeError(
-              `More than ${MAX_CANDIDATES} addresses in the search area; use a smaller radius`
-            );
-          }
-        }
-      }
-      ranges = next;
-    }
-    return found;
-  }
-
-  /** Read the PID of each candidate, batching features that sit close together. */
-  private async readPids(candidates: Candidate[], counter?: ReadCounter): Promise<string[]> {
-    const order = candidates.map((c, i) => ({ c, i })).sort((a, b) => a.c.offset - b.c.offset);
-    const pids = new Array<string>(candidates.length);
-
-    let batch: typeof order = [];
-    const flush = async () => {
-      if (batch.length === 0) return;
-      const from = batch[0].c.offset;
-      const to = Math.max(...batch.map(({ c }) => c.offset + c.length));
+    const pids = new Array<string>(points.length);
+    await mapLimit(runs, CONCURRENT_READS, async (run) => {
+      const from = run[0].point.offset;
+      const to = Math.max(...run.map(({ point }) => point.offset + point.length));
       const bytes = new Uint8Array(
         await this.read(this.layout.featuresOffset + from, to - from, counter)
       );
-      for (const { c, i } of batch) {
-        pids[i] = decodePid(bytes.subarray(c.offset - from, c.offset - from + c.length));
+      for (const { point, i } of run) {
+        pids[i] = decodePid(bytes.subarray(point.offset - from, point.offset - from + point.length));
       }
-      batch = [];
-    };
-
-    for (const entry of order) {
-      const last = batch[batch.length - 1];
-      if (last && entry.c.offset - (last.c.offset + last.c.length) > FEATURE_MERGE_GAP_BYTES) {
-        await flush();
-      }
-      batch.push(entry);
-    }
-    await flush();
+    });
     return pids;
   }
 }
