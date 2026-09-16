@@ -38,6 +38,7 @@ app.use(
       "X-R2-Fetches",
       "X-R2-Duration-Ms",
       "X-GNAF-Version",
+      "Server-Timing",
     ],
   })
 );
@@ -298,6 +299,7 @@ app.get("/api/addresses/reverse", async (c) => {
   const r2Start = Date.now();
   const counter: ReadCounter = { reads: 0, bytes: 0 };
   const index = await openGeoIndex(c.env.GNAF_BUCKET, gnafVersion, metadata.geo);
+  const searchStart = Date.now();
   let nearest;
   try {
     nearest = await index.nearest(point.lat, point.lng, { limit: wholeLimit, maxRadius: radius }, counter);
@@ -307,10 +309,12 @@ app.get("/api/addresses/reverse", async (c) => {
     }
     throw err;
   }
+  const recordsStart = Date.now();
 
   const records = new Map(
     await fetchAddressRecords(c.env, gnafVersion, nearest.map((n) => n.pid), c.executionCtx)
   );
+  const done = Date.now();
   const results: ReverseGeocodeResult[] = [];
   for (const hit of nearest) {
     const record = records.get(hit.pid);
@@ -329,7 +333,12 @@ app.get("/api/addresses/reverse", async (c) => {
     "X-GNAF-Version": gnafVersion,
     // Index range requests plus address shards; shards may come from cache.
     "X-R2-Fetches": String(counter.reads + shardPrefixes.size),
-    "X-R2-Duration-Ms": String(Date.now() - r2Start),
+    "X-R2-Duration-Ms": String(done - r2Start),
+    "Server-Timing": [
+      `open;dur=${searchStart - r2Start}`,
+      `search;dur=${recordsStart - searchStart};desc="${counter.reads} index reads, ${counter.bytes} bytes"`,
+      `records;dur=${done - recordsStart};desc="${shardPrefixes.size} address shards"`,
+    ].join(", "),
   });
   c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
