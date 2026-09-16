@@ -5,6 +5,26 @@ import type { ReactNode } from "react";
  * Each maps to one element of Australian street signage.
  */
 
+/**
+ * Horizontal rhythm for the whole site. Bands run full-bleed so the colour
+ * reaches both edges; their contents stay inside this so lines of text never
+ * run the width of a desktop monitor.
+ */
+export function Container({
+  children,
+  className = "",
+  width = "wide",
+}: {
+  children: ReactNode;
+  className?: string;
+  width?: "wide" | "text";
+}) {
+  const max = width === "text" ? "max-w-[820px]" : "max-w-[1180px]";
+  return (
+    <div className={`mx-auto w-full ${max} px-4 sm:px-6 lg:px-8 ${className}`}>{children}</div>
+  );
+}
+
 /** The site mark: a green blade plate with a yellow locality dot. */
 export function Mark({ size = 28 }: { size?: number }) {
   const s = size / 28;

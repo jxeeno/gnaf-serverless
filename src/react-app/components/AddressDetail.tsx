@@ -139,7 +139,7 @@ export function AddressDetail({
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
         {/* The map is the panel, not a tab behind one. */}
-        <div className="relative min-h-[300px] overflow-hidden rounded-xl border-[3px] border-ink shadow-[0_6px_0_#20241f]">
+        <div className="relative min-h-[300px] overflow-hidden rounded-xl border-[3px] border-ink shadow-[0_6px_0_#20241f] lg:min-h-[440px]">
           <AddressMap
             latitude={geocode?.latitude}
             longitude={geocode?.longitude}

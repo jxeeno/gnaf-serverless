@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AddressDetail, type DetailTiming } from "../components/AddressDetail";
-import { StatePanel } from "../components/blade";
+import { Container, StatePanel } from "../components/blade";
 import type { AddressResponse } from "../../shared/types";
 
 export const Route = createFileRoute("/address/$gnafId")({
@@ -58,7 +58,8 @@ function AddressPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4 border-b border-hairline bg-cream-panel px-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.1em] sm:px-6">
+      <div className="border-b border-hairline bg-cream-panel">
+        <Container className="flex items-center justify-between gap-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.1em]">
         <Link to="/" className="text-ink no-underline hover:text-blade">
           ← Back to search
         </Link>
@@ -67,9 +68,10 @@ function AddressPage() {
             {copied ? "Copied ✓" : "Copy address ⧉"}
           </button>
         )}
+        </Container>
       </div>
 
-      <div className="px-4 py-6 sm:px-6 sm:py-7">
+      <Container className="py-6 sm:py-7">
         {loading && (
           <StatePanel kind="loading" heading="Fetching shard" detail={gnafId}>
             Reading one of 4,096 R2 shards.
@@ -83,7 +85,7 @@ function AddressPage() {
         )}
 
         {address && <AddressDetail address={address} timing={timing ?? undefined} />}
-      </div>
+      </Container>
     </>
   );
 }

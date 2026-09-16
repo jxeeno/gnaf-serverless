@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { Pill, StatePanel } from "../components/blade";
+import { Container, Pill, StatePanel } from "../components/blade";
 
 export const Route = createFileRoute("/")({
   component: IndexPage,
@@ -326,7 +326,7 @@ function IndexPage() {
   // ── Street drill-down replaces the landing content ──────────────────────
   if (selectedStreet) {
     return (
-      <div className="px-4 py-7 sm:px-6">
+      <Container className="py-7">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div className="blade-plate">
             <div className="blade-face px-5 pt-2.5 pb-3">
@@ -407,7 +407,7 @@ function IndexPage() {
         {streetLoading && <StatePanel kind="loading" heading="Fetching street">{selectedStreet.display}</StatePanel>}
 
         {!streetLoading && shownStreetAddresses.length > 0 && (
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {shownStreetAddresses.map((addr) => (
               <Link
                 key={addr.p}
@@ -432,7 +432,7 @@ function IndexPage() {
             {error}
           </StatePanel>
         )}
-      </div>
+      </Container>
     );
   }
 
@@ -440,22 +440,23 @@ function IndexPage() {
   return (
     <>
       <div
-        className="relative overflow-hidden px-4 pb-10 pt-10 sm:px-6 sm:pt-12"
+        className="relative overflow-hidden"
         style={{
           background: "#fbf9f4",
           backgroundImage:
             "repeating-linear-gradient(90deg, rgba(32,36,31,0.05) 0 1px, transparent 1px 46px)",
         }}
       >
-        <div className="mb-8 flex flex-wrap items-start gap-6">
+        <Container className="pb-10 pt-10 sm:pt-14">
+        <div className="mb-8 flex flex-wrap items-start gap-6 lg:gap-10">
           <div className="min-w-0 flex-1">
             <div className="blade-plate inline-block">
               <div className="blade-face px-5 pb-3.5 pt-3 sm:px-7">
                 <div className="mb-0.5 text-[13px] font-bold uppercase tracking-[0.22em] text-mint">
                   Australia · all states
                 </div>
-                <div className="text-[38px] font-black uppercase leading-none tracking-[-0.02em] text-white sm:text-[50px]">
-                  Address&nbsp;Lookup
+                <div className="text-[32px] font-black uppercase leading-none tracking-[-0.02em] text-white sm:text-[44px] lg:text-[50px]">
+                  Address Lookup
                 </div>
               </div>
             </div>
@@ -468,7 +469,7 @@ function IndexPage() {
             </p>
           </div>
 
-          <div className="hidden w-[150px] shrink-0 pt-1.5 text-center sm:block">
+          <div className="hidden w-[150px] shrink-0 pt-1.5 text-center md:block">
             <div className="mx-auto flex h-32 w-32 rotate-45 items-center justify-center rounded-xl border-4 border-ink bg-signal">
               <div className="-rotate-45 text-center leading-[1.05]">
                 <div className="text-[26px] font-black tracking-[-0.02em]">15.9M</div>
@@ -629,10 +630,12 @@ function IndexPage() {
             </p>
           )}
         </div>
+        </Container>
       </div>
 
       {/* What happens between the keystroke and the answer. */}
-      <section className="bg-ink px-4 py-10 text-cream sm:px-6">
+      <section className="bg-ink text-cream">
+        <Container className="py-10">
         <h2 className="m-0 mb-6 text-[24px] font-black uppercase tracking-[-0.02em] sm:text-[30px]">
           The route your query takes
         </h2>
@@ -655,9 +658,11 @@ function IndexPage() {
             </li>
           ))}
         </ol>
+        </Container>
       </section>
 
-      <section className="px-4 py-10 sm:px-6">
+      <section>
+        <Container className="py-10">
         <h2 className="m-0 mb-2.5 text-[24px] font-black uppercase tracking-[-0.02em] sm:text-[30px]">
           Deploy your own
         </h2>
@@ -677,10 +682,12 @@ function IndexPage() {
             Using pre-built data ↗
           </a>
         </div>
+        </Container>
       </section>
 
       {requestLog.length > 0 && (
-        <section className="border-t border-hairline px-4 py-5 sm:px-6">
+        <section className="border-t border-hairline">
+          <Container className="py-5">
           <button
             type="button"
             onClick={() => setDebugOpen((v) => !v)}
@@ -719,6 +726,7 @@ function IndexPage() {
               </table>
             </div>
           )}
+          </Container>
         </section>
       )}
     </>

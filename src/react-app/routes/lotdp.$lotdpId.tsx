@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AddressDetail } from "../components/AddressDetail";
-import { StatePanel } from "../components/blade";
+import { Container, StatePanel } from "../components/blade";
 import type { AddressResponse } from "../../shared/types";
 
 export const Route = createFileRoute("/lotdp/$lotdpId")({
@@ -50,14 +50,16 @@ function LotDpPage() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-4 border-b border-hairline bg-cream-panel px-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.1em] sm:px-6">
+      <div className="border-b border-hairline bg-cream-panel">
+        <Container className="flex items-center justify-between gap-4 py-2.5 text-[12px] font-bold uppercase tracking-[0.1em]">
         <Link to="/" className="text-ink no-underline hover:text-blade">
           ← Back to search
         </Link>
         <span className="font-mono text-ink-mute">{lotdpId}</span>
+        </Container>
       </div>
 
-      <div className="px-4 py-6 sm:px-6 sm:py-7">
+      <Container className="py-6 sm:py-7">
         {/* The parcel itself is the yellow sign; the addresses on it are blades. */}
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div className="rounded-xl border-4 border-ink bg-signal px-5 pb-3 pt-2.5 shadow-[0_6px_0_#20241f]">
@@ -149,7 +151,7 @@ function LotDpPage() {
         )}
 
         {current && <AddressDetail address={current} />}
-      </div>
+      </Container>
     </>
   );
 }
