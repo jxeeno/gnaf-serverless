@@ -52,6 +52,18 @@ function principalFirst(a: { aliasOf?: string }, b: { aliasOf?: string }): numbe
   return (a.aliasOf ? 1 : 0) - (b.aliasOf ? 1 : 0);
 }
 
+/**
+ * Last-resort ordering so equally-scored results are stable.
+ *
+ * Without it, ties fall back to the order entries happen to sit in the street
+ * shard, which the index SQL does not pin (it orders by street key only). Two
+ * builds of identical data could then return different addresses for the same
+ * query, which makes results look like they drift for no reason.
+ */
+function byPid(a: { pid: string }, b: { pid: string }): number {
+  return a.pid < b.pid ? -1 : a.pid > b.pid ? 1 : 0;
+}
+
 export interface SearchMeta {
   d1RowsRead: number;
   d1Duration: number;
@@ -203,7 +215,7 @@ async function executeNumberOnlySearch(
     }
   }
 
-  scored.sort((a, b) => b.score - a.score || principalFirst(a, b));
+  scored.sort((a, b) => b.score - a.score || principalFirst(a, b) || byPid(a, b));
 
   // Diversify: 1 per street first, then backfill
   const seenStreets = new Set<number>();
@@ -508,7 +520,7 @@ export async function executeSearch(
   }
 
   // Sort by score descending, take top results
-  scoredAddresses.sort((a, b) => b.score - a.score || principalFirst(a, b));
+  scoredAddresses.sort((a, b) => b.score - a.score || principalFirst(a, b) || byPid(a, b));
 
   // When no numbers, first pick 1 per street for variety, then backfill remaining
   // slots with additional addresses from the same streets (highest scored first).
