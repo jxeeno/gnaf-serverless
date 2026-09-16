@@ -168,6 +168,12 @@ export interface GeoIndexMetadata {
   crs: string;
 }
 
+/** One answer from the reverse-geocode endpoint */
+export type ReverseGeocodeResult = AddressResponse & {
+  /** Metres from the queried point to the address's default geocode */
+  distance: number;
+};
+
 /** Result of a PMTiles point-in-polygon overlay query */
 export interface OverlayResult {
   label: string;
