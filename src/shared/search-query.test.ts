@@ -1368,4 +1368,28 @@ describe("lot numbers", () => {
       );
     });
   });
+
+  describe("scoring against the indexed lot", () => {
+    it("matches an address shown by its street number", () => {
+      const parsed = parseSearchQuery("lot 42 smith st")!;
+      expect(scoreAddress({ p: "X", d: "7", n: 7, lt: 42 }, parsed)).toBe(200);
+    });
+
+    it("excludes an address whose indexed lot differs", () => {
+      const parsed = parseSearchQuery("lot 42 smith st")!;
+      expect(scoreAddress({ p: "X", d: "7", n: 7, lt: 41 }, parsed)).toBe(0);
+    });
+
+    it("leaves entries without an indexed lot to the display fallback", () => {
+      // Shards built before the lot field was added carry no lt.
+      const parsed = parseSearchQuery("lot 11 lorne st")!;
+      expect(scoreAddress({ p: "X", d: "LOT 11" }, parsed)).toBe(200);
+      expect(scoreAddress({ p: "X", d: "11", n: 11 }, parsed)).toBe(90);
+    });
+
+    it("ignores the indexed lot when no lot was asked for", () => {
+      const parsed = parseSearchQuery("7 smith st")!;
+      expect(scoreAddress({ p: "X", d: "7", n: 7, lt: 42 }, parsed)).toBe(100);
+    });
+  });
 });

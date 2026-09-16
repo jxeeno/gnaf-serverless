@@ -301,8 +301,18 @@ export function scoreAddress(
   // address on that street — so it settles the score before the street-number
   // rules get a say.
   if (lotHint != null) {
+    // The indexed lot covers every address that has one, including those shown
+    // by their street number; the display check catches alphanumeric lots
+    // ("12A"), which are not indexed because they are not integers.
+    if (entry.lt != null && entry.lt === lotHint) {
+      return 200;
+    }
     if (lotDisplayHint != null && displayLotMatches(lotDisplayHint)) {
       return 200;
+    }
+    // An indexed lot that differs is a real mismatch, not missing data.
+    if (entry.lt != null) {
+      return 0;
     }
     // Some contributors record the lot as the street number, so a plain number
     // match is still worth surfacing, just below a true lot match.

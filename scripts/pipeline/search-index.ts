@@ -126,6 +126,7 @@ WITH base AS (
     _street_shard,
     CAST(number_first AS INTEGER) AS number_first,
     CAST(number_last AS INTEGER) AS number_last,
+    TRY_CAST(lot_number AS INTEGER) AS lot_number_int,
     CAST(flat_number AS INTEGER) AS flat_number,
     CAST(level_number AS INTEGER) AS level_number,
     CASE WHEN level_type_code IS NOT NULL OR level_number IS NOT NULL
@@ -172,6 +173,7 @@ SELECT
   number_last,
   flat_number,
   level_number,
+  lot_number_int,
   array_to_string(list_filter(
     [_level_line, _flat_line, _bn_line, _street_num],
     x -> x != ''
@@ -298,7 +300,7 @@ export async function generateSearchIndex(): Promise<void> {
   // Stream all entries in a single ordered query
   console.log("Streaming street address entries...");
   const entryResult = await conn.run(`
-    SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number, principal_pid
+    SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number, principal_pid, lot_number_int
     FROM _street_entries
     ORDER BY _street_key
   `);
@@ -319,6 +321,7 @@ export async function generateSearchIndex(): Promise<void> {
     const fnCol = chunk.getColumnVector(5);
     const lnCol = chunk.getColumnVector(6);
     const ppCol = chunk.getColumnVector(7);
+    const ltCol = chunk.getColumnVector(8);
 
     for (let i = 0; i < chunk.rowCount; i++) {
       const streetKey = skCol.getItem(i) as string;
@@ -336,6 +339,8 @@ export async function generateSearchIndex(): Promise<void> {
       if (ln != null) entry.l = ln;
       const pp = ppCol.getItem(i) as string | null;
       if (pp) entry.pp = pp;
+      const lt = ltCol.getItem(i) as number | null;
+      if (lt != null) entry.lt = lt;
 
       let arr = byStreetKey.get(streetKey);
       if (!arr) {
