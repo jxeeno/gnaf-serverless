@@ -302,7 +302,7 @@ export async function generateSearchIndex(): Promise<void> {
   const entryResult = await conn.run(`
     SELECT gnaf_pid, _street_key, display_prefix, number_first, number_last, flat_number, level_number, principal_pid, lot_number_int
     FROM _street_entries
-    ORDER BY _street_key
+    ORDER BY _street_key, gnaf_pid
   `);
 
   // Collect entries grouped by street_key

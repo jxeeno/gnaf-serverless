@@ -1058,18 +1058,21 @@ describe("scoreAddress", () => {
       ).toBe(100);
     });
 
-    it("streetHint within [n, n2] range scores as match", () => {
+    it("streetHint within [n, n2] range scores just under an exact match", () => {
       const parsed = parseSearchQuery("97 york st")!;
       expect(
         scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
-      ).toBe(100);
+      ).toBe(95);
     });
 
-    it("streetHint equal to n2 (upper bound) scores as match", () => {
-      const parsed = parseSearchQuery("99 york st")!;
-      expect(
-        scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
-      ).toBe(100);
+    it("scores both ends of a range alike", () => {
+      // Asking for 99 is no less apt than asking for 95 on "95-99 YORK ST",
+      // so the range penalty must not depend on which end was typed.
+      const lower = parseSearchQuery("95 york st")!;
+      const upper = parseSearchQuery("99 york st")!;
+      const ranged = entry({ n: 95, n2: 99, d: "95-99" });
+      expect(scoreAddress(ranged, upper)).toBe(95);
+      expect(scoreAddress(ranged, lower)).toBe(scoreAddress(ranged, upper));
     });
 
     it("streetHint outside range does not match as street number", () => {
@@ -1084,19 +1087,19 @@ describe("scoreAddress", () => {
       // All match: street in range + level + flat
       expect(
         scoreAddress(entry({ n: 95, n2: 99, f: 6, l: 10, d: "LEVEL 10, SUITE 6, 95-99" }), parsed)
-      ).toBe(200);
+      ).toBe(195);
       // Street in range, partial sub-addr match
       expect(
         scoreAddress(entry({ n: 95, n2: 99, l: 10, d: "LEVEL 10, 95-99" }), parsed)
-      ).toBe(150);
+      ).toBe(145);
       // Street in range, no sub-addr
       expect(
         scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
-      ).toBe(100);
+      ).toBe(95);
       // Street in range, sub-addr mismatch
       expect(
         scoreAddress(entry({ n: 95, n2: 99, l: 11, d: "LEVEL 11, 95-99" }), parsed)
-      ).toBe(90);
+      ).toBe(85);
     });
 
     it("range match with flat/unit hint (no level)", () => {
@@ -1106,11 +1109,11 @@ describe("scoreAddress", () => {
       // Flat match + street in range
       expect(
         scoreAddress(entry({ n: 95, n2: 99, f: 3, d: "UNIT 3, 95-99" }), parsed)
-      ).toBe(200);
+      ).toBe(195);
       // Street in range but no flat on entry
       expect(
         scoreAddress(entry({ n: 95, n2: 99, d: "95-99" }), parsed)
-      ).toBe(100);
+      ).toBe(95);
     });
 
     it("entry without n2 only matches exact number_first", () => {
@@ -1391,5 +1394,45 @@ describe("lot numbers", () => {
       const parsed = parseSearchQuery("7 smith st")!;
       expect(scoreAddress({ p: "X", d: "7", n: 7, lt: 42 }, parsed)).toBe(100);
     });
+  });
+});
+
+// ──────────────────────────────────────────────
+// Exact street numbers versus ranges
+// ──────────────────────────────────────────────
+
+describe("exact street numbers rank above ranges", () => {
+  // The reported case: "13 denison street" put 10-16, 13-19, 12-14 and 2-62
+  // ahead of the exact 13s, because containment scored the same as equality.
+  const parsed = parseSearchQuery("13 denison street")!;
+  const exact = { p: "exact", d: "13", n: 13 };
+  const ranges = [
+    { p: "r1", d: "10-16", n: 10, n2: 16 },
+    { p: "r2", d: "13-19", n: 13, n2: 19 },
+    { p: "r3", d: "12-14", n: 12, n2: 14 },
+    { p: "r4", d: "2-62", n: 2, n2: 62 },
+  ];
+
+  it("scores the exact address above every range containing it", () => {
+    for (const r of ranges) {
+      expect(scoreAddress(exact, parsed)).toBeGreaterThan(scoreAddress(r, parsed));
+    }
+  });
+
+  it("still returns ranges rather than excluding them", () => {
+    for (const r of ranges) {
+      expect(scoreAddress(r, parsed)).toBeGreaterThan(0);
+    }
+  });
+
+  it("penalises a range that starts on the number asked for", () => {
+    // "13-19" begins at 13 but still spans seven numbers, so it is a weaker
+    // answer than the address that is only 13.
+    expect(scoreAddress({ p: "r2", d: "13-19", n: 13, n2: 19 }, parsed)).toBe(95);
+    expect(scoreAddress(exact, parsed)).toBe(100);
+  });
+
+  it("does not penalise an entry whose n2 merely equals n", () => {
+    expect(scoreAddress({ p: "x", d: "13", n: 13, n2: 13 }, parsed)).toBe(100);
   });
 });

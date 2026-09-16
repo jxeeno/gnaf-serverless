@@ -326,6 +326,11 @@ export function scoreAddress(
   // When only flatHint exists (no separate levelHint), fall back to entry.f ?? entry.l.
   const entryFlat = levelHint != null ? entry.f : (entry.f ?? entry.l);
 
+  /** True when this entry covers a span of numbers rather than a single one */
+  function entryIsRanged(): boolean {
+    return entry.n2 != null && entry.n2 !== entry.n;
+  }
+
   /** Check if streetHint matches this entry's street number (exact or within range) */
   function streetNumMatches(): boolean {
     if (entry.n == null || streetHint == null) return false;
@@ -373,19 +378,29 @@ export function scoreAddress(
   const hasPartialMatch = !hasMismatch && !allMatch && hasPositiveMatch;
   const entryHasSubAddr = entryFlat != null || entry.l != null;
 
+  // "2-62 DENISON ST" contains 13, but someone typing 13 means number 13. A
+  // ranged address is a weaker answer than a single-numbered one, so rank it
+  // just below rather than level with it — otherwise a 60-number span ties with
+  // the address actually asked for and the winner comes down to shard order.
+  //
+  // The penalty follows the entry, not which end of the range was typed: for
+  // "95-99 YORK ST", asking for 99 is no less apt than asking for 95.
+  const RANGE_PENALTY = 5;
+  const rangePenalty = streetNumMatches() && entryIsRanged() ? RANGE_PENALTY : 0;
+
   if (hasSubAddrHint && streetHint != null) {
     // Sub-address hint(s) + street number known
     if (streetNumMatches() && allMatch) {
-      return 200; // Perfect: all specified hints match
+      return 200 - rangePenalty; // Perfect: all specified hints match
     }
     if (streetNumMatches() && hasPartialMatch) {
-      return 150; // Street match + partial sub-addr (some match, rest missing)
+      return 150 - rangePenalty; // Street match + partial sub-addr (some match, rest missing)
     }
     if (streetNumMatches() && !entryHasSubAddr) {
-      return 100; // Street number match, no sub-address on entry
+      return 100 - rangePenalty; // Street number match, no sub-address on entry
     }
     if (streetNumMatches()) {
-      return 90; // Street number match, sub-address mismatch
+      return 90 - rangePenalty; // Street number match, sub-address mismatch
     }
     if (allMatch) {
       return 70; // Sub-address match, different street number
@@ -396,23 +411,23 @@ export function scoreAddress(
       if (flatDisplayHint != null) {
         // Has alpha flat hint (e.g., "unit A 57") — boost if display matches
         if (displayHasFlat(flatDisplayHint)) {
-          return 110; // Alpha flat display match + street match
+          return 110 - rangePenalty; // Alpha flat display match + street match
         }
-        return 90; // Street matches but flat doesn't match
+        return 90 - rangePenalty; // Street matches but flat doesn't match
       }
       if (streetSuffix != null) {
         // Has suffix (e.g., "2A") — boost exact suffix match in display
         const fullNum = `${streetHint}${streetSuffix}`;
         if (displayStartsWith(fullNum)) {
-          return 110; // Exact number+suffix match
+          return 110 - rangePenalty; // Exact number+suffix match
         }
-        return 90; // Number matches but suffix differs (e.g., "2B" vs "2A")
+        return 90 - rangePenalty; // Number matches but suffix differs (e.g., "2B" vs "2A")
       }
       // No unit context: prefer bare street address over unit addresses
       if (entryFlat != null) {
-        return 90; // Entry has a flat/level — user didn't ask for one
+        return 90 - rangePenalty; // Entry has a flat/level — user didn't ask for one
       }
-      return 100; // Bare street address
+      return 100 - rangePenalty; // Bare street address
     }
     if (entryFlat != null && entryFlat === streetHint) {
       return 80; // Matched as flat/level number
