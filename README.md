@@ -81,6 +81,35 @@ GET /api/addresses?lpid=200//8941/10        # NT lot/plan
 GET /api/addresses?lpid=CANB/GRIF/25/14     # ACT block/section
 ```
 
+### `GET /api/addresses/reverse?lat=...&lng=...`
+
+Reverse geocode: find the addresses nearest a point.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `lat`, `lng` | required | The point, in decimal degrees |
+| `limit` | `1` | How many addresses to return, up to 10 |
+| `radius` | `2000` | Ignore addresses further away than this many metres, up to 20,000 |
+
+It returns an array of address responses, closest first. Each result includes `distance`: the metres from the point to the address's default geocode. If nothing is within `radius`, the array is empty.
+
+```
+GET /api/addresses/reverse?lat=-33.83263969&lng=151.08540762&limit=2
+```
+
+```json
+[
+  { "pid": "GANSW717928588", "sla": "76 RIDER BVD, RHODES NSW 2138", "precedence": "primary", "distance": 0, "...": "..." },
+  { "pid": "GANSW717929416", "sla": "15 SHORELINE DR, RHODES NSW 2138", "precedence": "primary", "distance": 37.4, "...": "..." }
+]
+```
+
+- **Which addresses it returns.** Results are street-level addresses: aliases and units inside a building are left out, because they share their principal's or building's point. A unit is reachable through its building's `secondaries`.
+- **Ties.** Some separate addresses share one point, such as `100`, `102` and `100-102 GEORGE ST`, or several rural lots placed at the same coordinate. When they tie, the lower GNAF PID comes first; raise `limit` to see them all.
+- **Rounding.** The point is rounded to 6 decimal places (about 11 cm) before searching, so identical requests share a cache entry. A query at an address's exact geocode can therefore report `0.1` m.
+- **Errors.** Returns `400` for a missing or invalid point, and `501` if the deployed data version has no [reverse-geocode index](#reverse-geocode-index). Returns `422` if the search would have to read an unreasonable amount of the index.
+- **Timing.** The `Server-Timing` response header breaks the time into opening the index, searching it (with its range-read count) and fetching address records. Overlays are not included in these results.
+
 ### Address Response Format
 
 ```json
@@ -228,7 +257,7 @@ Notes:
 
 ### Reverse-geocode index
 
-`pipeline:geo-index` writes `data/shards/geo/addresses.fgb`, a [FlatGeobuf](https://flatgeobuf.org/) file with a spatial index. It holds one point per street-level address, at the address's default geocode, and each point carries only its GNAF PID. Everything else about an address stays in the address shards. There is no API endpoint for it yet.
+`pipeline:geo-index` writes `data/shards/geo/addresses.fgb`, a [FlatGeobuf](https://flatgeobuf.org/) file with a spatial index. It holds one point per street-level address, at the address's default geocode, and each point carries only its GNAF PID. Everything else about an address stays in the address shards. The [reverse-geocode endpoint](#get-apiaddressesreverselatlng) reads it.
 
 "Street-level" means principal addresses that aren't a unit inside another address. Aliases and linked units share their principal's or building's coordinate, so they add no location information. In a tower they would pile thousands of points onto one coordinate. Units are still reachable through their building's `secondaries`. A unit with no building link is kept.
 
@@ -237,6 +266,10 @@ Notes:
 - The step reads the file back and fails the build if the point count, spatial index, geometry type, columns or CRS aren't as expected.
 - `metadata.json` describes the file under `geo`: its path, point count, size in bytes and CRS. Upload refuses to run if `metadata.json` lists a geo index that is missing or a different size.
 - R2 stores the file uncompressed, because it's read with range requests. Releases ship it gzipped, as its own asset.
+
+The Worker searches the file best-first, in `src/shared/reverse-geocode.ts`. It always expands the tree node that could hold the closest address, reading up to four tree pages at a time, and stops once nothing unread could beat the addresses already found. Every node records the box around what sits under it, and a leaf's box is its point, so distances come from the tree alone. Features are read only for the addresses returned, to get their PIDs.
+
+Each Worker instance keeps the top levels of the tree in memory (about 1.8 MB for the full index), plus recently read pages, so a search reads at most two tree levels from R2. On the August 2026 index, uncached searches took a median of about 130 ms.
 
 ### Loading the Search Index
 
