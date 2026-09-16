@@ -133,6 +133,12 @@ export interface StreetAddressEntry {
   l?: number;
   /** Principal address PID, when this address is a synonym (SYN) alias */
   pp?: string;
+  /**
+   * lot_number, when it is numeric. Carried for every address that has a lot,
+   * not just the lot-only ones, so "lot 42 smith st" finds the address whose
+   * lot is 42 even when it is displayed by its street number.
+   */
+  lt?: number;
 }
 
 /** A street shard file: map of street key → array of address entries */

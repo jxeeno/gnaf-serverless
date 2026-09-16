@@ -3,6 +3,7 @@ import {
   ABBREVIATION_TO_FULL,
   FLAT_LEVEL_KEYWORDS,
   LEVEL_KEYWORDS,
+  LOT_KEYWORDS,
 } from "./synonyms.js";
 import type { StreetAddressEntry } from "./types.js";
 
@@ -23,6 +24,10 @@ export interface ParsedQuery {
   streetSuffix: string | null;
   /** Raw alpha/alphanumeric flat identifier (e.g., "A", "A1", "LG3"), or null */
   flatDisplayHint: string | null;
+  /** Inferred lot number hint from a "LOT n" phrase (null if not detected) */
+  lotHint: number | null;
+  /** The lot token as typed, e.g. "11" or "12A" (null if not detected) */
+  lotDisplayHint: string | null;
   /** FTS5 query string with synonym expansion */
   ftsQuery: string;
 }
@@ -99,6 +104,14 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
     }
   }
 
+  // "LOT" names the parcel, not the street. Left in the FTS query it matches no
+  // street term and takes the whole search down with it, which is why
+  // "lot 11 lorne st lowanna" currently returns nothing at all.
+  const hasLotKeyword = rawTextTokens.some((t) => LOT_KEYWORDS.has(t));
+  if (hasLotKeyword) {
+    textTokens = textTokens.filter((t) => !LOT_KEYWORDS.has(t));
+  }
+
   if (textTokens.length === 0) {
     return null;
   }
@@ -120,10 +133,19 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
   const isNum = (t: string) => /^\d+[A-Z]?$/.test(t);
   let keywordFlatNum: string | null = null; // number paired with a flat keyword
   let keywordLevelNum: string | null = null; // number paired with a level keyword
+  let keywordLotNum: string | null = null; // number paired with "LOT"
   const pairedNumIndices = new Set<number>(); // allTokens indices of keyword-paired numbers
 
   for (let i = 0; i < allTokens.length; i++) {
     const tok = allTokens[i];
+    if (LOT_KEYWORDS.has(tok)) {
+      const next = i + 1 < allTokens.length ? allTokens[i + 1] : null;
+      if (next && isNum(next)) {
+        keywordLotNum = next;
+        pairedNumIndices.add(i + 1);
+      }
+      continue;
+    }
     if (!FLAT_LEVEL_KEYWORDS.has(tok)) continue;
     // Look ahead for a number token
     const next = i + 1 < allTokens.length ? allTokens[i + 1] : null;
@@ -148,6 +170,13 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
   let levelHint: number | null = null;
   let streetHint: number | null = null;
   let streetSuffix: string | null = null;
+  let lotHint: number | null = null;
+  let lotDisplayHint: string | null = null;
+
+  if (keywordLotNum != null) {
+    lotHint = parseNum(keywordLotNum);
+    lotDisplayHint = keywordLotNum;
+  }
 
   // Apply keyword-paired values
   if (keywordFlatNum != null) {
@@ -169,7 +198,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
       streetHint = parseNum(unpairedNums[unpairedNums.length - 1]);
       streetSuffix = parseSuffix(unpairedNums[unpairedNums.length - 1]);
     }
-  } else if (keywordFlatNum != null || keywordLevelNum != null) {
+  } else if (keywordFlatNum != null || keywordLevelNum != null || keywordLotNum != null) {
     // Keywords explicitly paired numbers — unpaired ones are street numbers
     if (unpairedNums.length >= 1) {
       // Use first unpaired number as street hint (closest to street context)
@@ -235,6 +264,8 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
     streetHint,
     streetSuffix,
     flatDisplayHint,
+    lotHint,
+    lotDisplayHint,
     ftsQuery,
   };
 }
@@ -253,7 +284,42 @@ export function scoreAddress(
     return 1;
   }
 
-  const { flatHint, levelHint, streetHint, streetSuffix, flatDisplayHint, numTokens } = parsed;
+  const { flatHint, levelHint, streetHint, streetSuffix, flatDisplayHint, lotHint, lotDisplayHint, numTokens } = parsed;
+
+  /**
+   * Lot-only addresses carry their lot in the display prefix, built by the
+   * search index as "LOT <prefix><number><suffix>" and placed last, so it reads
+   * either "LOT 11" or "UNIT 3, LOT 11".
+   */
+  function displayLotMatches(hint: string): boolean {
+    if (!entry.d) return false;
+    const lot = `LOT ${hint}`;
+    return entry.d === lot || entry.d.endsWith(`, ${lot}`);
+  }
+
+  // A lot number is an explicit, unambiguous ask — "LOT 11 LORNE ST" names one
+  // address on that street — so it settles the score before the street-number
+  // rules get a say.
+  if (lotHint != null) {
+    // The indexed lot covers every address that has one, including those shown
+    // by their street number; the display check catches alphanumeric lots
+    // ("12A"), which are not indexed because they are not integers.
+    if (entry.lt != null && entry.lt === lotHint) {
+      return 200;
+    }
+    if (lotDisplayHint != null && displayLotMatches(lotDisplayHint)) {
+      return 200;
+    }
+    // An indexed lot that differs is a real mismatch, not missing data.
+    if (entry.lt != null) {
+      return 0;
+    }
+    // Some contributors record the lot as the street number, so a plain number
+    // match is still worth surfacing, just below a true lot match.
+    if (entry.n != null && entry.n === lotHint) {
+      return 90;
+    }
+  }
 
   // Match flat hint against flat_number or level_number
   // When levelHint is separate, use entry.f for flatHint and entry.l for levelHint.
