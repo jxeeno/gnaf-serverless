@@ -214,15 +214,29 @@ npm run pipeline:import        # Import PSVs into DuckDB and denormalize (includ
 npm run pipeline:shard         # Hash-shard and gzip-compress address/lotdp records
 npm run pipeline:search-index  # Generate street shards + D1 search index SQL
 npm run pipeline:precompute    # Pre-compute short query results (requires search-index)
+npm run pipeline:geo-index     # Build the reverse-geocode index (FlatGeobuf of address points)
 npm run pipeline:upload        # Upload shards to R2 and update gnaf/latest.json
 ```
 
 Notes:
 
-- `npm run pipeline:run` runs all six steps. It doesn't load the search index into D1; see [Loading the Search Index](#loading-the-search-index).
+- `npm run pipeline:run` runs all seven steps. It doesn't load the search index into D1; see [Loading the Search Index](#loading-the-search-index).
 - `pipeline:download` is skipped if `data/gnaf/` already exists. Delete `data/gnaf/` and `data/gnaf.zip` to pick up a newer GNAF release.
 - Local builds are versioned `v<YYYYMMDD>-<datum>` (e.g. `v20260913-gda2020`). CI builds include the GNAF release, e.g. `v20260815-may2026-gda2020`.
 - Upload writes to `gnaf/<version>/` and updates `gnaf/latest.json`. Set `GNAF_SKIP_LATEST=1` to leave the pointer alone.
+- `pipeline:geo-index` installs DuckDB's `spatial` extension on first run, so it needs network access.
+
+### Reverse-geocode index
+
+`pipeline:geo-index` writes `data/shards/geo/addresses.fgb`, a [FlatGeobuf](https://flatgeobuf.org/) file with a spatial index. It holds one point per street-level address, at the address's default geocode, and each point carries only its GNAF PID. Everything else about an address stays in the address shards. There is no API endpoint for it yet.
+
+"Street-level" means principal addresses that aren't a unit inside another address. Aliases and linked units share their principal's or building's coordinate, so they add no location information. In a tower they would pile thousands of points onto one coordinate. Units are still reachable through their building's `secondaries`. A unit with no building link is kept.
+
+- Points are in the build's datum: EPSG:7844 for GDA2020, or EPSG:4283 for GDA94.
+- For the August 2026 release the file holds about 10.7 million points and is about 1.3 GB. It compresses to about 360 MB.
+- The step reads the file back and fails the build if the point count, spatial index, geometry type, columns or CRS aren't as expected.
+- `metadata.json` describes the file under `geo`: its path, point count, size in bytes and CRS. Upload refuses to run if `metadata.json` lists a geo index that is missing or a different size.
+- R2 stores the file uncompressed, because it's read with range requests. Releases ship it gzipped, as its own asset.
 
 ### Loading the Search Index
 
@@ -260,7 +274,7 @@ Before merging the branch, revert the `wrangler.json` commit. Clean up the test 
 
 ## Using Pre-built Data
 
-Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data and the D1 search index.
+Each quarterly GNAF release is published as a [GitHub release](https://github.com/jxeeno/gnaf-serverless/releases) containing pre-processed, hash-sharded address data, the D1 search index, and the reverse-geocode index.
 
 The [Deploy workflow](.github/workflows/deploy-gnaf.yml) uploads shards to R2, creates a new D1 database with read replication, and updates `wrangler.json`. It runs when:
 
@@ -270,11 +284,14 @@ The [Deploy workflow](.github/workflows/deploy-gnaf.yml) uploads shards to R2, c
 
 To deploy manually instead:
 
-1. Download a `gnaf-shards-<version>.tar` from [Releases](https://github.com/jxeeno/gnaf-serverless/releases) (about 1.5 GB). The examples below use `v20260815-may2026-gda2020`.
-2. Create the R2 bucket and extract/upload:
+1. Download `gnaf-shards-<version>.tar` (about 1.5 GB) from [Releases](https://github.com/jxeeno/gnaf-serverless/releases). For releases that include the reverse-geocode index, also download `gnaf-geo-<version>.fgb.gz` (about 360 MB). The examples below use `v20260815-may2026-gda2020`.
+2. Create the R2 bucket, then extract and upload. The geo index must be stored uncompressed:
    ```bash
    npx wrangler r2 bucket create gnaf-data --location oc
-   mkdir shards && tar -xf gnaf-shards-v20260815-may2026-gda2020.tar -C shards && cd shards
+   mkdir shards && tar -xf gnaf-shards-v20260815-may2026-gda2020.tar -C shards
+   # Only if the release has a geo index
+   mkdir -p shards/geo && gunzip -c gnaf-geo-v20260815-may2026-gda2020.fgb.gz > shards/geo/addresses.fgb
+   cd shards
    # Upload via R2's S3-compatible API
    aws s3 sync . s3://gnaf-data/gnaf/v20260815-may2026-gda2020/ \
      --endpoint-url https://<account_id>.r2.cloudflarestorage.com \

@@ -154,6 +154,18 @@ export interface ShardMetadata {
   totalLotDpShards: number;
   datum: string;
   gnafReleaseName?: string;
+  /** Reverse-geocode index, when this version has one */
+  geo?: GeoIndexMetadata;
+}
+
+/** A FlatGeobuf of street-level address points, each carrying only its GNAF PID */
+export interface GeoIndexMetadata {
+  /** Path of the file under gnaf/{version}/ */
+  file: string;
+  featuresCount: number;
+  bytes: number;
+  /** Coordinate reference system, e.g. "EPSG:7844" */
+  crs: string;
 }
 
 /** Result of a PMTiles point-in-polygon overlay query */
