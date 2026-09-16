@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,7 +6,8 @@ import {
   PutObjectCommand,
   type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
-import type { ShardMetadata } from "../../src/shared/types.js";
+import { Upload } from "@aws-sdk/lib-storage";
+import type { GeoIndexMetadata, ShardMetadata } from "../../src/shared/types.js";
 import {
   S3_ENDPOINT,
   S3_REGION,
@@ -94,6 +96,58 @@ async function uploadDirectory(
   return uploaded;
 }
 
+/**
+ * Fail before anything is uploaded if metadata.json advertises a geo index that
+ * isn't here to go with it — otherwise the new version would point the Worker at
+ * a file that doesn't exist. Returns the local path of the index, if any.
+ */
+async function checkGeoIndex(geo: GeoIndexMetadata | undefined): Promise<string | null> {
+  if (!geo) return null;
+  const localPath = path.join(SHARDS_DIR, geo.file);
+  let bytes: number;
+  try {
+    bytes = (await fsp.stat(localPath)).size;
+  } catch {
+    throw new Error(`metadata.json lists a geo index at ${geo.file}, but ${localPath} is missing`);
+  }
+  if (bytes !== geo.bytes) {
+    throw new Error(
+      `Geo index ${localPath} is ${bytes} bytes, but metadata.json says ${geo.bytes}`
+    );
+  }
+  return localPath;
+}
+
+/**
+ * The geo index is well over a gigabyte, so it goes up in parts from a stream
+ * rather than being read into memory like the shards. It is stored
+ * uncompressed: the Worker reads it with range requests, which address the
+ * stored bytes.
+ */
+async function uploadGeoIndex(client: S3Client, localPath: string, s3Key: string): Promise<void> {
+  const upload = new Upload({
+    client,
+    params: {
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      Body: fs.createReadStream(localPath),
+      ContentType: "application/octet-stream",
+    },
+    // R2 needs every part but the last to be the same size, which fixed-size
+    // parts give us.
+    partSize: 64 * 1024 * 1024,
+    queueSize: 4,
+  });
+  let lastLogged = 0;
+  upload.on("httpUploadProgress", ({ loaded, total }) => {
+    if (loaded == null || loaded - lastLogged < 256 * 1024 * 1024) return;
+    lastLogged = loaded;
+    const pct = total ? ` (${((100 * loaded) / total).toFixed(0)}%)` : "";
+    console.log(`  Geo index: ${(loaded / 1048576).toFixed(0)} MiB uploaded${pct}`);
+  });
+  await upload.done();
+}
+
 export async function upload(): Promise<void> {
   // Read metadata to get version
   const metadataPath = path.join(SHARDS_DIR, "metadata.json");
@@ -103,6 +157,7 @@ export async function upload(): Promise<void> {
   const version = metadata.version;
 
   console.log(`Uploading GNAF ${version} to S3...`);
+  const geoPath = await checkGeoIndex(metadata.geo);
   const client = createS3Client();
 
   // Upload address, lot/DP, and street shards in parallel
@@ -114,8 +169,14 @@ export async function upload(): Promise<void> {
     uploadDirectory(client, LOTDP_SHARDS_DIR, `gnaf/${version}/lotdp`, "application/json", "gzip"),
     uploadDirectory(client, streetShardsDir, `gnaf/${version}/streets`, "application/json", "gzip"),
     uploadDirectory(client, precomputedDir, `gnaf/${version}/precomputed`, "application/json"),
+    geoPath && metadata.geo
+      ? uploadGeoIndex(client, geoPath, `gnaf/${version}/${metadata.geo.file}`)
+      : Promise.resolve(),
   ]);
   console.log(`  Uploaded ${addressCount} address, ${lotdpCount} lot/DP, ${streetCount} street, ${precomputedCount} precomputed shards`);
+  if (metadata.geo) {
+    console.log(`  Uploaded geo index (${metadata.geo.featuresCount.toLocaleString()} points)`);
+  }
 
   // Upload metadata
   console.log("Uploading metadata...");
