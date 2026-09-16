@@ -24,4 +24,9 @@ export default defineConfig({
 			"@": path.resolve(__dirname, "./src"),
 		},
 	},
+	// MapLibre asks for a module worker (falling back to a classic one), so the
+	// worker we hand it via setWorkerUrl has to be emitted as an ES module.
+	worker: {
+		format: "es",
+	},
 })

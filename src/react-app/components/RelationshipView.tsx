@@ -55,7 +55,12 @@ export function RelationshipView({ address }: { address: AddressResponse }) {
   const siteIsSelf = site === address;
   const siblings: Node[] = useMemo(
     () =>
-      (site?.secondaries ?? []).map((s) => ({ pid: s.pid, label: s.joinType.name })),
+      (site?.secondaries ?? []).map((s) => ({
+        pid: s.pid,
+        // AUTO is how nearly every link is made, so saying so on each row is
+        // noise; a manually created link is the one worth flagging.
+        label: s.joinType.code === "1" ? "" : "manual link",
+      })),
     [site]
   );
 
@@ -165,20 +170,30 @@ export function RelationshipView({ address }: { address: AddressResponse }) {
         {hasAliases && (
           <section>
             <h3 className="m-0 mb-2.5 text-[12px] font-extrabold uppercase tracking-[0.1em] text-ink-mute">
-              {address.alias ? "The address this one is an alias of" : "Other ways to write this address"}
+              Other ways this address is written
             </h3>
 
-            {address.alias && (
-              <NodeRow
-                pid={address.alias.principalPid}
-                sla={name(address.alias.principalPid)}
-                role="principal"
-              />
-            )}
-
-            {aliasNodes.length > 0 && (
+            {/* Either direction reads the same way: the main record heads the
+                branch, the alternate forms hang off it. */}
+            {address.alias ? (
               <>
-                <NodeRow pid={address.pid} sla={address.sla} role="principal" current />
+                <NodeRow
+                  pid={address.alias.principalPid}
+                  sla={name(address.alias.principalPid)}
+                  role="main record"
+                />
+                <div className="mt-1.5 border-l-[3px] border-dashed border-ink pl-3.5">
+                  <NodeRow
+                    pid={address.pid}
+                    sla={address.sla}
+                    role={address.alias.type.name}
+                    current
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <NodeRow pid={address.pid} sla={address.sla} role="main record" current />
                 <div className="mt-1.5 border-l-[3px] border-dashed border-ink pl-3.5">
                   <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
                     {aliasNodes.map((node) => (
@@ -229,13 +244,15 @@ function NodeRow({
     <>
       <span className="min-w-0 flex-1 text-[13px] font-bold uppercase leading-snug">{text}</span>
       <span className={`font-mono text-[10px] ${current ? "text-mint" : "text-ink-mute"}`}>{pid}</span>
-      <span
-        className={`text-[9.5px] font-extrabold uppercase tracking-[0.08em] ${
-          current ? "text-mint" : "text-ink-mute"
-        }`}
-      >
-        {count != null ? `${count.toLocaleString()} inside` : role}
-      </span>
+      {(count != null || role) && (
+        <span
+          className={`text-[9.5px] font-extrabold uppercase tracking-[0.08em] ${
+            current ? "text-mint" : "text-ink-mute"
+          }`}
+        >
+          {count != null ? `${count.toLocaleString()} inside` : role}
+        </span>
+      )}
     </>
   );
 

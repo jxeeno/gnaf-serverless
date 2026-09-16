@@ -1,6 +1,22 @@
 import { useEffect, useRef } from "react";
-import { Map as MapLibreMap, Marker, Popup, NavigationControl, ScaleControl } from "maplibre-gl";
+import {
+  Map as MapLibreMap,
+  Marker,
+  Popup,
+  NavigationControl,
+  ScaleControl,
+  setWorkerUrl,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+// MapLibre resolves its worker at runtime with `new URL(\`./${name}\`, import.meta.url)`.
+// The name is computed, so Vite can't see it, emits no worker asset, and the
+// request falls through to the SPA's index.html — which the browser rejects for
+// a module script, leaving the map blank. Bundling the worker ourselves (which
+// also resolves its own `./maplibre-gl-shared.mjs` import) and pointing
+// MapLibre at the emitted file is the supported way out.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
+
+setWorkerUrl(maplibreWorkerUrl);
 
 /** OpenFreeMap serves the Liberty style and its tiles free, with no API key. */
 const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
