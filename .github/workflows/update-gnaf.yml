@@ -253,9 +253,50 @@ jobs:
           retention-days: 1
           compression-level: 1
 
+  # ── Stage 2c: Generate the reverse-geocode index (parallel) ────────────
+  geo-index:
+    needs: build-db
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download DuckDB artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gnaf-duckdb
+          path: data
+
+      - name: Generate reverse-geocode index
+        run: npm run pipeline:geo-index
+
+      # The index compresses to about a quarter of its size, so it travels
+      # gzipped and is only expanded where it is uploaded to R2, which has to
+      # store it raw for range requests.
+      - name: Compress geo index
+        run: gzip -6 data/shards/geo/addresses.fgb
+
+      - name: Upload geo index artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gnaf-geo
+          path: data/shards/geo/
+          retention-days: 1
+          compression-level: 0
+
   # ── Stage 3: Create GitHub release ────────────────────────────────────
   release:
-    needs: [merge-shards, search-index]
+    needs: [merge-shards, search-index, geo-index]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -286,6 +327,21 @@ jobs:
           name: gnaf-search-index
           path: data/shards
 
+      - name: Download geo index artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gnaf-geo
+          path: data/shards/geo
+
+      # The geo job runs before metadata.json exists, so it leaves its details
+      # in geo.json for this step to merge.
+      - name: Add geo index to metadata
+        run: |
+          jq --slurpfile geo data/shards/geo/geo.json '.geo = $geo[0]' \
+            data/shards/metadata.json > data/shards/metadata.json.tmp
+          mv data/shards/metadata.json.tmp data/shards/metadata.json
+          echo "Geo index: $(jq -c .geo data/shards/metadata.json)"
+
       - name: Read metadata
         id: meta
         run: |
@@ -305,6 +361,10 @@ jobs:
             echo "datum=$DATUM"
             echo "gnaf_release=$GNAF_RELEASE"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Decompress geo index (test build)
+        if: env.TEST_SUFFIX != ''
+        run: gunzip data/shards/geo/addresses.fgb.gz
 
       - name: Upload to R2 (test build)
         if: env.TEST_SUFFIX != ''
@@ -397,7 +457,11 @@ jobs:
         if: env.TEST_SUFFIX == ''
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-        run: tar -cf "gnaf-shards-${VERSION}.tar" -C data/shards .
+        run: |
+          # The shard tar is already ~1.4 GB against GitHub's 2 GiB asset limit,
+          # so the geo index ships as its own asset.
+          tar -cf "gnaf-shards-${VERSION}.tar" -C data/shards --exclude=./geo .
+          mv data/shards/geo/addresses.fgb.gz "gnaf-geo-${VERSION}.fgb.gz"
 
       - name: Create release notes
         if: env.TEST_SUFFIX == ''
@@ -420,7 +484,7 @@ jobs:
 
           ### Contents
 
-          The archive contains pre-processed, hash-sharded GNAF address data ready to upload to any S3-compatible object storage.
+          The shard archive contains pre-processed, hash-sharded GNAF address data ready to upload to any S3-compatible object storage.
 
           \`\`\`
           addresses/      # Address shards (gzipped JSON, keyed by GNAF PID)
@@ -431,9 +495,11 @@ jobs:
           metadata.json   # Version, counts, and configuration
           \`\`\`
 
+          \`gnaf-geo-${VERSION}.fgb.gz\` is the reverse-geocode index: a FlatGeobuf of street-level address points, each carrying only its GNAF PID. Decompress it to \`geo/addresses.fgb\` alongside the shards. It must be stored uncompressed, because it is read with range requests.
+
           ### Usage
 
-          1. Download and extract the archive
+          1. Download and extract the shard archive, and decompress the geo index to \`geo/addresses.fgb\`
           2. Upload the contents to your S3-compatible bucket under \`gnaf/${VERSION}/\`
           3. Create a \`gnaf/latest.json\` pointer: \`{"version": "${VERSION}"}\`
           4. Configure the worker with your S3 endpoint and bucket
@@ -455,7 +521,8 @@ jobs:
           gh release create "$VERSION" \
             --title "GNAF ${GNAF_RELEASE} (${VERSION})" \
             --notes-file release-notes.md \
-            "gnaf-shards-${VERSION}.tar"
+            "gnaf-shards-${VERSION}.tar" \
+            "gnaf-geo-${VERSION}.fgb.gz"
 
       - name: Trigger deploy workflow
         if: env.TEST_SUFFIX == ''
@@ -474,3 +541,4 @@ jobs:
             gnaf-shards
             gnaf-shards-*
             gnaf-search-index
+            gnaf-geo

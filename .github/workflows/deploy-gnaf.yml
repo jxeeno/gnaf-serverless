@@ -72,6 +72,28 @@ jobs:
           mkdir -p data/shards
           tar -xf data/gnaf-shards-*.tar -C data/shards
 
+      - name: Download reverse-geocode index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Releases made before the geo index existed don't list one
+          GEO_FILE=$(jq -r '.geo.file // empty' data/shards/metadata.json)
+          if [ -z "$GEO_FILE" ]; then
+            echo "No geo index in ${VERSION}"
+            exit 0
+          fi
+          if ! [[ "$GEO_FILE" =~ ^geo/[a-z0-9-]+\.fgb$ ]]; then
+            echo "::error::Unexpected geo index path: $GEO_FILE"
+            exit 1
+          fi
+          ASSET="gnaf-geo-${VERSION}.fgb.gz"
+          gh release download "$VERSION" --pattern "$ASSET" --dir data/
+          # Stored uncompressed: the Worker reads it with range requests
+          mkdir -p data/shards/geo
+          gunzip -c "data/${ASSET}" > "data/shards/${GEO_FILE}"
+          rm "data/${ASSET}"
+
       - name: Upload to R2
         run: npm run pipeline:upload
         env:

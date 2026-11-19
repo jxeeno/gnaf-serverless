@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { formatAddressResponse } from "../shared/address-format.js";
-import type { ShardMetadata } from "../shared/types.js";
+import type { ReverseGeocodeResult, ShardMetadata, ShardRecord } from "../shared/types.js";
+import { SearchAreaTooLargeError, type ReadCounter } from "../shared/reverse-geocode.js";
 import {
   fetchAddressShard,
   fetchLotDpShard,
   fetchStreetShard,
   fetchLatestVersion,
+  fetchMetadata,
 } from "./r2.js";
+import { openGeoIndex } from "./geo.js";
 import { queryOverlays } from "./pmtiles.js";
 import { executeSearch, entryToSla } from "./search.js";
 import type { StreetRow } from "./search.js";
@@ -35,6 +38,7 @@ app.use(
       "X-R2-Fetches",
       "X-R2-Duration-Ms",
       "X-GNAF-Version",
+      "Server-Timing",
     ],
   })
 );
@@ -57,6 +61,45 @@ async function resolveGnafVersion(
 
 function getShardPrefixLength(env: Bindings): number {
   return parseInt(env.SHARD_PREFIX_LENGTH ?? "3", 10);
+}
+
+/**
+ * Look up the records for a list of PIDs, fetching each address shard once.
+ *
+ * Records come back grouped by shard, in the order each shard was first needed,
+ * and keep the PIDs' order within a shard. PIDs without a record are left out.
+ */
+async function fetchAddressRecords(
+  env: Bindings,
+  version: string,
+  pids: readonly string[],
+  ctx: ExecutionContext
+): Promise<Array<[string, ShardRecord]>> {
+  const prefixLen = getShardPrefixLength(env);
+  const pidsByShardPrefix = new Map<string, string[]>();
+  for (const pid of pids) {
+    const prefix = md5hex(pid).substring(0, prefixLen);
+    let group = pidsByShardPrefix.get(prefix);
+    if (!group) {
+      group = [];
+      pidsByShardPrefix.set(prefix, group);
+    }
+    group.push(pid);
+  }
+
+  const shardEntries = Array.from(pidsByShardPrefix.entries());
+  const shardResults = await Promise.all(
+    shardEntries.map(([prefix]) => fetchAddressShard(env.GNAF_BUCKET, version, prefix, ctx))
+  );
+
+  const records: Array<[string, ShardRecord]> = [];
+  shardEntries.forEach(([, shardPids], i) => {
+    for (const pid of shardPids) {
+      const record = shardResults[i][pid];
+      if (record) records.push([pid, record]);
+    }
+  });
+  return records;
 }
 
 // Cache TTL for search responses (1 week — data only changes on GNAF version updates)
@@ -188,6 +231,119 @@ app.get("/api/addresses/search", async (c) => {
   return response;
 });
 
+const REVERSE_DEFAULT_RADIUS_M = 2000;
+const REVERSE_MAX_RADIUS_M = 20_000;
+const REVERSE_MAX_LIMIT = 10;
+
+/**
+ * Read an optional numeric query parameter. Returns the fallback when it is
+ * absent, clamps it to [min, max], and returns null when it isn't a number.
+ */
+function numberParam(raw: string | undefined, fallback: number, min: number, max: number): number | null {
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return null;
+  return Math.min(Math.max(value, min), max);
+}
+
+// Reverse geocode: the street-level addresses nearest a point.
+// Registered before /:pid so "reverse" isn't taken for a PID.
+app.get("/api/addresses/reverse", async (c) => {
+  const rawLat = c.req.query("lat")?.trim();
+  const rawLng = c.req.query("lng")?.trim();
+  // Number("") is 0, so an empty value has to be caught before converting.
+  const lat = rawLat ? Number(rawLat) : NaN;
+  const lng = rawLng ? Number(rawLng) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return c.json(
+      { error: "lat and lng are required: lat from -90 to 90, lng from -180 to 180" },
+      400
+    );
+  }
+  const limit = numberParam(c.req.query("limit"), 1, 1, REVERSE_MAX_LIMIT);
+  const radius = numberParam(c.req.query("radius"), REVERSE_DEFAULT_RADIUS_M, 1, REVERSE_MAX_RADIUS_M);
+  if (limit === null || radius === null) {
+    return c.json({ error: "limit and radius must be numbers" }, 400);
+  }
+
+  // Rounding to 6 decimal places (about 0.1 m) lets nearby requests share a
+  // cache entry; the search uses the same rounded point, so distances match it.
+  const point = {
+    lat: Math.round(lat * 1e6) / 1e6,
+    lng: Math.round(lng * 1e6) / 1e6,
+  };
+  const wholeLimit = Math.floor(limit);
+
+  const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
+  const cache = caches.default;
+  const canonical = new URL("/api/addresses/reverse", c.req.url);
+  canonical.searchParams.set("lat", String(point.lat));
+  canonical.searchParams.set("lng", String(point.lng));
+  canonical.searchParams.set("limit", String(wholeLimit));
+  canonical.searchParams.set("radius", String(radius));
+  const cacheKey = responseCacheKey(canonical.toString(), gnafVersion);
+  const cachedResponse = await cache.match(cacheKey);
+  if (cachedResponse) return cachedResponse;
+
+  const metadata = await fetchMetadata(c.env.GNAF_BUCKET, gnafVersion, c.executionCtx);
+  if (!metadata) {
+    throw new Error(`No metadata for GNAF version ${gnafVersion}`);
+  }
+  if (!metadata.geo) {
+    return c.json(
+      { error: "Reverse geocoding isn't available for this data version", version: gnafVersion },
+      501
+    );
+  }
+
+  const r2Start = Date.now();
+  const counter: ReadCounter = { reads: 0, bytes: 0 };
+  const index = await openGeoIndex(c.env.GNAF_BUCKET, gnafVersion, metadata.geo);
+  const searchStart = Date.now();
+  let nearest;
+  try {
+    nearest = await index.nearest(point.lat, point.lng, { limit: wholeLimit, maxRadius: radius }, counter);
+  } catch (err) {
+    if (err instanceof SearchAreaTooLargeError) {
+      return c.json({ error: err.message }, 422);
+    }
+    throw err;
+  }
+  const recordsStart = Date.now();
+
+  const records = new Map(
+    await fetchAddressRecords(c.env, gnafVersion, nearest.map((n) => n.pid), c.executionCtx)
+  );
+  const done = Date.now();
+  const results: ReverseGeocodeResult[] = [];
+  for (const hit of nearest) {
+    const record = records.get(hit.pid);
+    if (!record) continue;
+    results.push({
+      ...formatAddressResponse(hit.pid, record),
+      distance: Math.round(hit.distance * 10) / 10,
+    });
+  }
+  const shardPrefixes = new Set(
+    nearest.map((n) => md5hex(n.pid).substring(0, getShardPrefixLength(c.env)))
+  );
+
+  const response = c.json(results, 200, {
+    "Cache-Control": `public, max-age=${CACHE_TTL}`,
+    "X-GNAF-Version": gnafVersion,
+    // Index range requests plus address shards; shards may come from cache.
+    "X-R2-Fetches": String(counter.reads + shardPrefixes.size),
+    "X-R2-Duration-Ms": String(done - r2Start),
+    "Server-Timing": [
+      `open;dur=${searchStart - r2Start}`,
+      `search;dur=${recordsStart - searchStart};desc="${counter.reads} index reads, ${counter.bytes} bytes"`,
+      `records;dur=${done - recordsStart};desc="${shardPrefixes.size} address shards"`,
+    ].join(", "),
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+});
+
 // Get address by GNAF PID
 app.get("/api/addresses/:pid", async (c) => {
   const gnafVersion = await resolveGnafVersion(c.env, c.executionCtx);
@@ -274,36 +430,8 @@ app.get("/api/addresses", async (c) => {
     return c.json({ error: "No addresses found for LPID", lpid }, 404);
   }
 
-  // Group PIDs by their address shard prefix to minimize shard fetches
-  const pidsByShardPrefix = new Map<string, string[]>();
-  for (const pid of pids) {
-    const prefix = md5hex(pid).substring(0, prefixLen);
-    if (!pidsByShardPrefix.has(prefix)) {
-      pidsByShardPrefix.set(prefix, []);
-    }
-    pidsByShardPrefix.get(prefix)!.push(pid);
-  }
-
-  // Fetch all needed shards in parallel
-  const shardEntries = Array.from(pidsByShardPrefix.entries());
-  const shardResults = await Promise.all(
-    shardEntries.map(([prefix]) =>
-      fetchAddressShard(c.env.GNAF_BUCKET, gnafVersion, prefix, c.executionCtx)
-    )
-  );
-
-  // Collect addresses from all shards
-  const addresses = [];
-  for (let i = 0; i < shardEntries.length; i++) {
-    const [, shardPids] = shardEntries[i];
-    const shardData = shardResults[i];
-    for (const pid of shardPids) {
-      const record = shardData[pid];
-      if (record) {
-        addresses.push(formatAddressResponse(pid, record));
-      }
-    }
-  }
+  const records = await fetchAddressRecords(c.env, gnafVersion, pids, c.executionCtx);
+  const addresses = records.map(([pid, record]) => formatAddressResponse(pid, record));
 
   if (addresses.length === 0) {
     return c.json({ error: "No addresses found for LPID", lpid }, 404);

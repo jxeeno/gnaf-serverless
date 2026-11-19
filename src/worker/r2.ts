@@ -1,4 +1,9 @@
-import type { AddressShardData, LotDpShardData, StreetShardData } from "../shared/types.js";
+import type {
+  AddressShardData,
+  LotDpShardData,
+  ShardMetadata,
+  StreetShardData,
+} from "../shared/types.js";
 
 export async function fetchAndDecompress(
   bucket: R2Bucket,
@@ -54,6 +59,42 @@ export async function fetchLatestVersion(
   ctx.waitUntil(cache.put(cacheKey, cacheResponse));
 
   return data.version;
+}
+
+/**
+ * Fetch a version's metadata.json from R2, with Cloudflare Cache API caching.
+ * Returns null when the version has none.
+ */
+export async function fetchMetadata(
+  bucket: R2Bucket,
+  version: string,
+  ctx: ExecutionContext
+): Promise<ShardMetadata | null> {
+  const r2Key = `gnaf/${version}/metadata.json`;
+  const cacheKey = new Request(`https://r2-cache/${r2Key}`);
+  const cache = caches.default;
+
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    return cached.json();
+  }
+
+  const obj = await bucket.get(r2Key);
+  if (!obj) return null;
+  const json = await obj.text();
+
+  ctx.waitUntil(
+    cache.put(
+      cacheKey,
+      new Response(json, {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "public, max-age=86400",
+        },
+      })
+    )
+  );
+  return JSON.parse(json);
 }
 
 /**

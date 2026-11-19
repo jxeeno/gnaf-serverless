@@ -23,6 +23,16 @@ export const SEARCH_INDEX_SQL_PATH = path.join(SHARDS_DIR, "search-index.sql");
 export const SEARCH_INDEX_DIR = path.join(SHARDS_DIR, "search-index");
 export const PRECOMPUTED_DIR = path.join(SHARDS_DIR, "precomputed");
 
+/** Reverse-geocode index: a FlatGeobuf of street-level address points */
+export const GEO_DIR = path.join(SHARDS_DIR, "geo");
+export const GEO_FGB_NAME = "addresses.fgb";
+export const GEO_FGB_PATH = path.join(GEO_DIR, GEO_FGB_NAME);
+/**
+ * Details of the index, written beside it. CI builds the index in its own job,
+ * where metadata.json doesn't exist yet, so this carries them to the release.
+ */
+export const GEO_INFO_PATH = path.join(GEO_DIR, "geo.json");
+
 export const S3_ENDPOINT = process.env.S3_ENDPOINT ?? "";
 export const S3_REGION = process.env.S3_REGION ?? "auto";
 export const S3_BUCKET = process.env.S3_BUCKET ?? "gnaf";
