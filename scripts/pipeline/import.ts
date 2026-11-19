@@ -102,6 +102,13 @@ export async function importGnaf(): Promise<DuckDBInstance> {
     "PRIMARY_SECONDARY",
   ];
 
+  // Tables a release may omit (G-NAF dropped the 2016 mesh blocks). When their
+  // files are missing they become empty tables, so the joins below yield NULLs.
+  const optionalTableColumns: Record<string, string> = {
+    ADDRESS_MESH_BLOCK_2016: "address_detail_pid VARCHAR, mb_2016_pid VARCHAR",
+    MB_2016: "mb_2016_pid VARCHAR, mb_2016_code VARCHAR",
+  };
+
   // Tables that need all states regardless of filter (reference/lookup data)
   const allStateTables = [
     "STATE",
@@ -126,7 +133,13 @@ export async function importGnaf(): Promise<DuckDBInstance> {
   for (const table of stateTables) {
     const files = await findPsvFiles(GNAF_EXTRACT_DIR, table);
     if (files.length === 0) {
-      console.warn(`  No PSV files found for ${table}, skipping`);
+      const columns = optionalTableColumns[table];
+      if (columns) {
+        console.warn(`  No PSV files found for ${table}, creating it empty`);
+        await run(`CREATE OR REPLACE TABLE ${table.toLowerCase()} (${columns})`);
+      } else {
+        console.warn(`  No PSV files found for ${table}, skipping`);
+      }
       continue;
     }
     console.log(`Importing ${table} (${files.length} files)...`);
