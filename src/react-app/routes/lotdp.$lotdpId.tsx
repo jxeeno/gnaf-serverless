@@ -10,17 +10,26 @@ export const Route = createFileRoute("/lotdp/$lotdpId")({
 
 function LotDpPage() {
   const { lotdpId } = Route.useParams();
-  const [results, setResults] = useState<AddressResponse[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  // The last lookup's outcome and the page being viewed, each tagged with the
+  // LPID it was for, so a new LPID starts loading on its first page without
+  // the effect setting state synchronously.
+  const [result, setResult] = useState<{
+    lotdpId: string;
+    results?: AddressResponse[];
+    error?: string;
+  } | null>(null);
+  const [pageState, setPageState] = useState({ lotdpId, page: 0 });
+
+  const lookup = result?.lotdpId === lotdpId ? result : null;
+  const loading = lookup === null;
+  const results = lookup?.results ?? [];
+  const error = lookup?.error ?? null;
+  const page = pageState.lotdpId === lotdpId ? pageState.page : 0;
+  const setPage = (next: number | ((page: number) => number)) =>
+    setPageState({ lotdpId, page: typeof next === "function" ? next(page) : next });
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setResults([]);
-    setPage(0);
 
     fetch(`/api/addresses?lotdp=${encodeURIComponent(lotdpId)}`)
       .then(async (res) => {
@@ -31,13 +40,10 @@ function LotDpPage() {
         return res.json();
       })
       .then((data) => {
-        if (!cancelled) setResults(Array.isArray(data) ? data : [data]);
+        if (!cancelled) setResult({ lotdpId, results: Array.isArray(data) ? data : [data] });
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setResult({ lotdpId, error: err.message });
       });
 
     return () => {

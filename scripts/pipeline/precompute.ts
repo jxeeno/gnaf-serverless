@@ -173,10 +173,10 @@ function executeSearch(
   if (!parsed) {
     const numMatch = q.trim().match(/^(\d+)$/);
     if (!numMatch) return { streets: [], addresses: [] };
-    return searchByNumber(parseInt(numMatch[1], 10), q);
+    return searchByNumber(parseInt(numMatch[1], 10));
   }
 
-  const { streetHint, flatHint, levelHint } = parsed;
+  const { streetHint, flatHint } = parsed;
 
   // Single short text token: direct prefix match (mirrors useDirectQuery in worker)
   const firstToken = parsed.textTokens[0];
@@ -342,8 +342,7 @@ function executeSearch(
 }
 
 function searchByNumber(
-  num: number,
-  q: string
+  num: number
 ): { streets: StreetResult[]; addresses: AddressResult[] } {
   const matchedStreets = matchStreetsByNumber(num, Math.max(30, LIMIT * 3));
   if (matchedStreets.length === 0) return { streets: [], addresses: [] };

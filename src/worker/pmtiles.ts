@@ -37,9 +37,7 @@ class R2Source implements Source {
 
   async getBytes(
     offset: number,
-    length: number,
-    _signal?: AbortSignal,
-    _etag?: string
+    length: number
   ): Promise<RangeResponse> {
     const obj = await this.bucket.get(this.key, {
       range: { offset, length },

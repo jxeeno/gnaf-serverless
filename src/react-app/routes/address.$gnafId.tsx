@@ -10,18 +10,24 @@ export const Route = createFileRoute("/address/$gnafId")({
 
 function AddressPage() {
   const { gnafId } = Route.useParams();
-  const [address, setAddress] = useState<AddressResponse | null>(null);
-  const [timing, setTiming] = useState<DetailTiming | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // The last lookup's outcome, tagged with the PID it was for. Until the
+  // lookup for the current PID finishes, the page shows it as loading.
+  const [result, setResult] = useState<{
+    gnafId: string;
+    address?: AddressResponse;
+    timing?: DetailTiming;
+    error?: string;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const current = result?.gnafId === gnafId ? result : null;
+  const loading = current === null;
+  const address = current?.address ?? null;
+  const timing = current?.timing ?? null;
+  const error = current?.error ?? null;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setAddress(null);
-    setTiming(null);
     const started = performance.now();
 
     fetch(`/api/addresses/${encodeURIComponent(gnafId)}`)
@@ -34,14 +40,10 @@ function AddressPage() {
       })
       .then((data: AddressResponse) => {
         if (cancelled) return;
-        setAddress(data);
-        setTiming({ totalMs: performance.now() - started });
+        setResult({ gnafId, address: data, timing: { totalMs: performance.now() - started } });
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setResult({ gnafId, error: err.message });
       });
 
     return () => {

@@ -92,7 +92,7 @@ export function parseSearchQuery(q: string): ParsedQuery | null {
   //   2. The query starts with alpha-flat slash/comma notation (e.g., "A1/173", "B, 5")
   // Strips tokens like "A", "A1", "LG3" from text tokens so they don't leak into FTS.
   let flatDisplayHint: string | null = null;
-  const hasAlphaFlatNotation = /^\s*[A-Z]{1,3}\d*\s*[\/,]\s*\d/i.test(q);
+  const hasAlphaFlatNotation = /^\s*[A-Z]{1,3}\d*\s*[/,]\s*\d/i.test(q);
   if (hasUnitKeyword || hasAlphaFlatNotation) {
     // Match: single letter (A, B) or 1-3 alpha prefix + digits (A1, LG3)
     const flatIdIdx = textTokens.findIndex(

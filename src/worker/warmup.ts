@@ -13,7 +13,7 @@ export async function loadPrecomputedQuery(
   version: string,
   normalizedQuery: string,
   ctx: ExecutionContext
-): Promise<{ streets: any[]; addresses: any[] } | null> {
+): Promise<{ streets: unknown[]; addresses: unknown[] } | null> {
   const r2Key = `gnaf/${version}/precomputed/${normalizedQuery}.json`;
   const cacheUrl = `https://r2-cache/${r2Key}`;
   const cacheKey = new Request(cacheUrl);

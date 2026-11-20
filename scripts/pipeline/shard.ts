@@ -91,11 +91,17 @@ export function toShardRecord(row: Record<string, unknown>): ShardRecord {
   return rec;
 }
 
+/** The parts of a DuckDB data chunk that readAllRows reads. */
+interface RowChunk {
+  rowCount: number;
+  getColumnVector(columnIndex: number): { getItem(itemIndex: number): unknown };
+}
+
 /**
  * Read all rows from a DuckDB result into an array of row objects.
  */
 export async function readAllRows(
-  result: { fetchChunk: () => Promise<any>; columnNames: () => string[] }
+  result: { fetchChunk: () => Promise<RowChunk | null>; columnNames: () => string[] }
 ): Promise<Record<string, unknown>[]> {
   const columns = result.columnNames();
   const rows: Record<string, unknown>[] = [];
