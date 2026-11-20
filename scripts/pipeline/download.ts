@@ -7,7 +7,6 @@ import {
   CKAN_BASE,
   GNAF_PACKAGE_ID,
   DATUM,
-  DATA_DIR,
   GNAF_ZIP_PATH,
   GNAF_EXTRACT_DIR,
 } from "./config.js";
